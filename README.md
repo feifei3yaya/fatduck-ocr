@@ -4,14 +4,16 @@
 
 拍一张表格照片，或者把 PDF 丢进来，几秒钟后得到一份保留行列结构的 Excel。全程在本机识别，图片和结果不上传云端。
 
+官网：[feifei3yaya.github.io/fatduck-ocr](https://feifei3yaya.github.io/fatduck-ocr/) · 下载：[最新版本](https://github.com/feifei3yaya/fatduck-ocr/releases/latest)
+
 ![界面预览](docs/screenshot.png)
 
 ## 下载
 
 | 版本 | 适合谁 | 下载 |
 | --- | --- | --- |
-| 安装包（推荐） | 大多数 Windows 用户，装完即可在开始菜单找到 | [下载 `肥鸭文档转换_安装包`](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
-| 便携包 | 不想安装、放 U 盘里用 | [下载 `肥鸭文档转换_便携包`](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
+| 安装包（推荐） | 大多数 Windows 用户，装完即可在开始菜单找到 | [下载安装包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
+| 便携包 | 不想安装、放 U 盘里用 | [下载便携包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
 | 源码 | 想自己改、自己构建 | [下载源码包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
 
 - 系统要求：Windows 10 / 11（64 位）。macOS 版本在规划中。
