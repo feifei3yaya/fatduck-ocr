@@ -1,5 +1,7 @@
 # 肥鸭文档转换
 
+[![CI](https://github.com/feifei3yaya/fatduck-ocr/actions/workflows/ci.yml/badge.svg)](https://github.com/feifei3yaya/fatduck-ocr/actions/workflows/ci.yml)
+
 **把拍歪的表格照片，变成能编辑的 Excel。**
 
 拍一张表格照片，或者把 PDF 丢进来，几秒钟后得到一份保留行列结构的 Excel。全程在本机识别，图片和结果不上传云端。

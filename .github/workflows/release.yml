@@ -1,0 +1,41 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  draft:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 读取版本号
+        id: ver
+        shell: pwsh
+        run: |
+          $v = Get-Content VERSION -Raw
+          $v = $v.Trim()
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: 创建草稿 Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: "肥鸭文档转换 v${{ steps.ver.outputs.version }}"
+          body_path: CHANGELOG.md
+          files: |
+            LICENSE
+            THIRD_PARTY_NOTICES.md
+
+      - name: 提示后续步骤
+        shell: pwsh
+        run: |
+          Write-Host "草稿 Release 已创建。"
+          Write-Host "exe / 便携包 / 安装包体积较大且依赖 models 与 runtime，"
+          Write-Host "请在本地运行 build_exe.py、build_package.py、ISCC installer.iss 后，"
+          Write-Host "用 gh release upload 或网页上传到该草稿。"

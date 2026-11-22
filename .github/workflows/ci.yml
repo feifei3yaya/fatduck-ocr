@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Python 语法检查
+        run: |
+          python -m py_compile core.py desktop.py web_app.py engine.py ocr_worker.py md2excel.py table_rebuild.py job_store.py ai_calibrate.py xcheck.py nv_fix.py build_exe.py build_package.py
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: 前端语法检查
+        run: node --check web/app.js
+
+      - name: 检查是否误提交敏感目录
+        shell: pwsh
+        run: |
+          $bad = @('models', 'runtime', 'dist', 'build') | Where-Object { Test-Path $_ }
+          if ($bad) {
+            Write-Error "仓库中不应包含：$($bad -join ', ')"
+            exit 1
+          }
