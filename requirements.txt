@@ -1,0 +1,20 @@
+﻿# 运行期依赖（主程序）
+openpyxl==3.1.5
+windnd==1.0.7
+
+# 桌面程序入口（desktop.py：本地服务 + WebView2 原生窗口，web/ 为界面资源）
+fastapi==0.115.6
+uvicorn==0.34.0
+python-multipart==0.0.20
+websockets==17.3
+pywebview==6.2.1        # WebView2 原生窗口（自动带 pythonnet / clr-loader）
+pystray==0.19.5         # 最小化到系统托盘（desktop.py）
+Pillow==13.0.0          # 托盘图标加载（pystray 依赖，代码直接 import PIL）
+
+# 构建依赖（仅打包 exe 时需要）
+pyinstaller==6.22.3
+
+# 说明：
+# - OCR 运行时依赖（openvino / opencv / numpy）属独立环境，不在此清单内；
+#   用 build_runtime.py 从本机 OpenVINO venv 生成可重定位的 runtime\。
+# - Pillow 不可排除：desktop.py 的托盘用 PIL.Image 加载 app.ico/app.png。

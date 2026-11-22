@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>肥鸭文档转换</title>
+  <link rel="icon" type="image/png" href="../assets/app.png">
+  <link rel="stylesheet" href="styles.css?v=20261122-duck3">
+</head>
+<body>
+  <div class="app">
+    <img class="deco-feet" src="../assets/duck-feet.png" alt="" aria-hidden="true" draggable="false">
+    <!-- ================= 顶栏（无边框窗口标题栏） ================= -->
+    <header class="topbar" id="topbar">
+      <div class="brand">
+        <img class="brand-duck" src="../assets/duck-logo.png" alt="" draggable="false">
+        <div class="brand-text">
+          <h1>肥鸭文档转换</h1>
+          <p>轻松转换，高效处理你的文件</p>
+        </div>
+      </div>
+      <div class="topbar-right">
+        <div class="win-controls" id="winControls" hidden>
+          <button type="button" class="win-btn" id="winMin" aria-label="最小化" title="最小化">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M5 10h10"/></svg>
+          </button>
+          <button type="button" class="win-btn" id="winMax" aria-label="最大化" title="最大化">
+            <svg class="ico-max" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="5" y="5" width="10" height="10" rx="1"/></svg>
+            <svg class="ico-restore" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><rect x="4" y="7" width="9" height="9" rx="1"/><path d="M7 7V4.5h8.5V13h-2.5"/></svg>
+          </button>
+          <button type="button" class="win-btn win-close" id="winClose" aria-label="关闭" title="关闭">
+            <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="m5.5 5.5 9 9m0-9-9 9"/></svg>
+          </button>
+        </div>
+      </div>
+    </header>
+
+    <!-- ================= 主体 ================= -->
+    <main class="body">
+      <!-- 主区：三页签 + 面板 -->
+      <div class="main">
+        <div class="update-banner" id="updateBanner" hidden>
+          <span class="update-dot" aria-hidden="true"></span>
+          <span>发现新版本 <b id="updateVer"></b></span>
+          <a href="#" id="updateLink" target="_blank" rel="noopener">查看更新</a>
+          <button type="button" class="update-close" id="updateClose" aria-label="关闭提示">×</button>
+        </div>
+        <div class="tabs-bar">
+          <nav class="tabs" id="tabs" role="tablist" aria-label="主视图切换">
+          <button class="tab on" id="tabFiles" data-tab="files" role="tab" aria-selected="true" aria-controls="paneFiles">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/><path d="M3 10h18"/></svg>
+            文件转换<span class="n" id="tabFilesN">0</span>
+          </button>
+          <button class="tab" id="tabFlags" data-tab="flags" role="tab" aria-selected="false" aria-controls="paneFlags">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 4.5 6v5.2c0 4.4 3 7.3 7.5 9.8 4.5-2.5 7.5-5.4 7.5-9.8V6L12 3Z"/><path d="m9 12 2 2 4-4"/></svg>
+            待复核<span class="n" id="tabFlagsN" style="display:none">0</span>
+          </button>
+          <button class="tab" id="tabLog" data-tab="log" role="tab" aria-selected="false" aria-controls="paneLog">
+            <svg class="tab-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="3.5" width="16" height="17" rx="2"/><path d="m8 9 2 2-2 2M12.5 13h3.5"/></svg>
+            运行日志
+          </button>
+          </nav>
+          <button class="btn jobs-entry" id="btnJobs" title="查看最近转换任务，可载入待复核快照"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2.5"/></svg>最近任务</button>
+        </div>
+
+        <!-- 页签 1：文件清单 -->
+        <section class="pane" id="paneFiles" role="tabpanel" aria-labelledby="tabFiles">
+          <div class="dropzone" id="dropzone" role="button" tabindex="0" aria-label="拖入或点击选择文件">
+            <img class="dz-hero" src="../assets/duck-hero.png?v=20261122" alt="" draggable="false">
+            <div class="dz-copy">
+              <span class="dz-eyebrow">肥鸭 · 图片 / PDF 转 Excel</span>
+              <p class="drop-title dz-full">把图片 / PDF 拖到这里，或点击选择文件</p>
+              <p class="drop-title dz-compact">继续添加文件</p>
+              <p class="drop-sub">支持 PNG / JPG / BMP / TIFF / WEBP / PDF，单个文件 ≤ 100 MB，可拖入整个文件夹</p>
+              <div class="dz-steps" aria-hidden="true">
+                <span class="dz-step"><b>01</b>添加文件</span>
+                <i>→</i>
+                <span class="dz-step"><b>02</b>自动识别</span>
+                <i>→</i>
+                <span class="dz-step"><b>03</b>导出 Excel</span>
+              </div>
+              <span class="dz-cta">选择文件</span>
+              <span class="dz-mini">支持拖入文件夹 · Ctrl+V 粘贴 · 桌面版 Ctrl+Shift+Alt+V 全局粘贴</span>
+            </div>
+            <input type="file" id="fileInput" multiple hidden
+                   accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,.pdf">
+          </div>
+
+          <div class="file-bar">
+            <button class="btn" id="btnAdd"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg>添加文件</button>
+            <button class="btn" id="btnPaste" title="从剪贴板粘贴图片（窗口内任意位置按 Ctrl+V 也可以）"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4" width="10" height="4" rx="1.5"/><path d="M9 6H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3"/></svg>粘贴图片</button>
+            <button class="btn" id="btnRemove" disabled><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 12h8"/></svg>删除选中</button>
+            <button class="btn" id="btnClear"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>清空</button>
+            <span class="file-count" id="fileCount">共 0 个文件</span>
+          </div>
+
+          <div class="file-list-wrap">
+            <table class="file-table">
+              <thead>
+                <tr>
+                  <th class="c-check"><input type="checkbox" id="checkAll" aria-label="全选文件" title="全选 / 取消全选"></th>
+                  <th>文件名</th>
+                  <th class="c-size">大小</th>
+                  <th class="c-status">状态</th>
+                  <th class="c-act">操作</th>
+                </tr>
+              </thead>
+              <tbody id="fileTbody">
+                <tr class="empty-row"><td colspan="5">暂无文件，请添加、拖入或粘贴图片</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- 转换结果：横向结果面板，完成后出现在文件清单下方 -->
+          <section class="result-card" id="resultCard" hidden role="status" aria-live="polite">
+            <div class="rc-head">
+              <span class="rc-badge" aria-hidden="true">
+                <svg viewBox="0 0 24 24"><path d="m6 12.5 4 4 8-9"/></svg>
+              </span>
+              <div class="rc-heading">
+                <h2 id="rcTitle">转换完成</h2>
+                <p id="rcSubtitle"></p>
+              </div>
+              <button class="rc-close" id="resultClose" title="关闭" aria-label="关闭">×</button>
+            </div>
+
+            <div class="rc-body">
+              <div class="rc-col rc-col-main">
+                <div class="rc-file" id="rcFile">
+                  <span class="rc-file-icon" aria-hidden="true">XLS</span>
+                  <div class="rc-file-text">
+                    <span class="rc-file-label">输出文件</span>
+                    <span class="rc-file-name" id="rcFileName"></span>
+                  </div>
+                </div>
+
+                <div class="rc-metrics" id="rcMetrics">
+                  <div class="rc-metric ok"><b id="statOk">0</b><span id="statOkLabel">已确认</span></div>
+                  <div class="rc-metric warn"><b id="statWarn">0</b><span id="statWarnLabel">待核对</span></div>
+                  <div class="rc-metric bad"><b id="statBad">0</b><span id="statBadLabel">格式异常</span></div>
+                </div>
+
+                <p class="rc-note" id="rcNote" hidden></p>
+
+                <div class="rc-files" id="rcFiles" hidden>
+                  <div class="rcs-head">
+                    <span class="rcs-title">按文件汇总</span>
+                    <span class="rcs-count" id="rcFilesCount"></span>
+                  </div>
+                  <div class="rcs-wrap">
+                    <table class="rcs-table">
+                      <thead>
+                        <tr><th>文件</th><th class="num">单号</th><th class="num">行</th><th class="num">待复核</th><th class="num">耗时</th></tr>
+                      </thead>
+                      <tbody id="rcFilesBody"></tbody>
+                    </table>
+                  </div>
+                </div>
+              </div>
+
+              <div class="rc-col rc-col-side">
+                <div class="rc-quality" id="rcQuality" hidden>
+                  <div class="rcq-head">
+                    <span class="rcq-label">拍摄质量</span>
+                    <span class="rcq-tier" id="rcQTier">—</span>
+                    <span class="rcq-score" id="rcQScore">—</span>
+                    <button class="rcq-toggle" id="rcQToggle" type="button" aria-expanded="false" hidden>每图明细</button>
+                  </div>
+                  <div class="rcq-list" id="rcQList" hidden></div>
+                  <p class="rcq-why" id="rcQWhy" hidden></p>
+                  <div class="rcq-sug" id="rcQSug" hidden></div>
+                </div>
+
+                <div class="rc-fails" id="rcFails" hidden>
+                  <div class="rcf-head">
+                    <span class="rcf-title">失败文件</span>
+                    <span class="rcf-count" id="rcFailCount"></span>
+                  </div>
+                  <ul class="rcf-list" id="rcFailList"></ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="rc-actions" id="rcActions">
+              <button class="rc-btn primary" id="btnOpen" hidden>打开文件</button>
+              <button class="rc-btn" id="btnReveal" hidden>打开目录</button>
+              <button class="rc-btn" id="btnFlags" hidden>待复核</button>
+              <button class="rc-btn" id="btnRetryFailed" hidden>重试失败文件</button>
+              <button class="rc-btn" id="btnSearch" hidden>单号查询</button>
+              <button class="rc-btn" id="btnFullCheck" hidden>完整识别并导出 Excel</button>
+              <button class="rc-btn" id="btnDownload" hidden>下载</button>
+            </div>
+          </section>
+        </section>
+
+        <!-- 页签 2：待复核 -->
+        <section class="pane" id="paneFlags" role="tabpanel" aria-labelledby="tabFlags" hidden>
+          <div class="flag-hint">
+            <b id="flagHintTitle">暂无待复核项</b>
+            <span id="flagHintText">转换完成后，置信度不足、需人工核对的单元格会汇总到这里。</span>
+            <button class="btn" id="btnFlagsOpen">弹窗查看清单</button>
+          </div>
+
+          <div class="flag-tools" id="flagTools" hidden>
+            <select id="flagFileFilter" title="按文件筛选"><option value="">全部文件</option></select>
+            <select id="flagPrioFilter" title="按优先级筛选">
+              <option value="">全部优先级</option>
+              <option value="高">高优先</option>
+              <option value="中">中优先</option>
+              <option value="低">低优先</option>
+            </select>
+            <input id="flagSearch" type="text" spellcheck="false" placeholder="搜索单号 / 文件 / 原因">
+            <span class="flag-progress" id="flagProgress">已处理 0 / 0</span>
+          </div>
+
+          <div class="flag-pane-wrap" id="flagPaneWrap" hidden>
+            <div class="flag-pane-bar">
+              <span id="flagPaneSummary"></span>
+              <button class="btn" id="btnFlagsModal">弹窗查看</button>
+            </div>
+            <div class="flag-table-wrap">
+              <table class="flag-table flag-pane-table">
+                <thead>
+                  <tr><th>类型</th><th>文件</th><th>位置</th><th>重建值</th><th>整图OCR</th><th>放大复识</th><th>原因</th><th>操作</th></tr>
+                </thead>
+                <tbody id="flagBody"></tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- 页签 3：运行日志 -->
+        <section class="pane" id="paneLog" role="tabpanel" aria-labelledby="tabLog" hidden>
+          <div class="log-box" id="logBox"></div>
+        </section>
+      </div>
+
+      <!-- 右栏操作轨：上半部分可滚动，操作区与底部说明固定，避免互相遮挡 -->
+      <aside class="rail">
+        <div class="rail-scroll">
+          <div class="rail-title">转换设置</div>
+          <section class="rsec">
+            <div class="rsec-head">
+              <span class="rsec-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="3.5" y="4" width="17" height="16" rx="2"/><path d="M3.5 9h17M9 9v11M14.5 9v11"/></svg></span>
+              <span class="h">导出模式</span>
+            </div>
+            <div class="mode-list" id="modeList"></div>
+          </section>
+
+          <section class="rsec" id="layoutSection">
+            <div class="rsec-head">
+              <span class="rsec-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><path d="M4 9h16M4 14h16M10 4v16"/></svg></span>
+              <span class="h">表格输出</span>
+            </div>
+            <div class="layout-list" id="layoutList" role="radiogroup" aria-label="表格输出方式"></div>
+          </section>
+
+          <section class="rsec" id="outputSection">
+            <div class="rsec-head">
+              <span class="rsec-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg></span>
+              <span class="h">保存位置</span>
+            </div>
+            <div class="save-row">
+              <svg class="save-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z"/></svg>
+              <input id="outPath" type="text" spellcheck="false" title="转换完成后可下载该文件">
+              <button class="btn" id="btnBrowse">浏览…</button>
+            </div>
+          </section>
+
+          <section class="rsec rail-summary" id="summarySection">
+            <div class="rsec-head"><span class="h">本次输出</span></div>
+            <div class="sum-list">
+              <div class="sum-row"><span>工作方式</span><b id="sumMode">图片转 Excel</b></div>
+              <div class="sum-row"><span>文件数量</span><b id="sumCount">0 个</b></div>
+              <div class="sum-row"><span>保存格式</span><b id="sumFormat">Excel (.xlsx)</b></div>
+            </div>
+          </section>
+
+          <section class="rsec" id="targetSection" hidden>
+            <div class="rsec-head"><label class="h" for="waybillInput">要查找的单号</label></div>
+            <input id="waybillInput" class="waybill-input" type="text" autocomplete="off"
+                   spellcheck="false" placeholder="粘贴完整单号">
+            <div class="field-hint">支持单张或多张图片；空格和短横线会自动忽略。</div>
+          </section>
+
+          <div class="rail-tip">
+            <b>结果在哪</b>
+            <span>转换完成后，结果、拍摄质量与按文件汇总会显示在左侧文件清单下方。</span>
+          </div>
+        </div>
+
+        <section class="rsec rail-op">
+          <div class="rsec-head">
+            <span class="rsec-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M13 2 5 13h6l-1 9 9-12h-6V2Z"/></svg></span>
+            <span class="h">操作</span>
+          </div>
+          <button class="btn-primary" id="btnStart"><svg class="bolt" viewBox="0 0 24 24" aria-hidden="true"><path d="M13 2 5 13h6l-1 9 9-12h-6V2Z"/></svg>开始转换</button>
+          <div class="action-row">
+            <button class="btn-danger" id="btnCancel" disabled>取消</button>
+            <button class="btn-open" id="btnOpenDir"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7h7l2 2h9v10H3V7Z"/><path d="M3 10h18"/></svg>打开目录</button>
+          </div>
+          <div class="progress-track" id="progressTrack">
+            <div class="progress-fill" id="progressFill"></div>
+            <span class="progress-pct" id="progressPct"></span>
+          </div>
+          <div class="status-text" id="statusText"><span id="statusMsg">等待添加文件</span><span class="elapsed" id="elapsed" hidden></span></div>
+        </section>
+
+        <div class="rail-foot">
+          <span class="shortcuts">Ctrl+O 添加 · Ctrl+V 粘贴 · Delete 删除选中<br>Ctrl+Enter 开始 · Esc 取消</span>
+          <div class="foot-actions">
+            <button class="btn-ghost" id="btnSettings">设置</button>
+            <button class="btn-ghost" id="btnAbout">关于 · 隐私</button>
+            <button class="btn-ghost" id="btnCloud">云端纠错</button>
+          </div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- ================= 待复核清单弹窗 ================= -->
+  <div class="modal-mask" id="flagModal" hidden>
+    <div class="modal flag-modal" role="dialog" aria-modal="true" aria-labelledby="flagTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="flagTitle">待复核清单</h2>
+          <p id="flagSummary"></p>
+        </div>
+      </div>
+      <div class="flag-table-wrap">
+        <table class="flag-table">
+          <thead>
+            <tr><th>文件</th><th>位置</th><th>重建值</th><th>整图OCR</th><th>放大复识</th><th>原因</th></tr>
+          </thead>
+          <tbody id="flagBodyModal"></tbody>
+        </table>
+      </div>
+      <button class="btn-primary" id="flagClose">知道了</button>
+    </div>
+  </div>
+
+  <!-- ================= 图片预览（点击文件打开） ================= -->
+  <div class="modal-mask" id="previewModal" hidden>
+    <div class="modal preview-modal" role="dialog" aria-modal="true" aria-labelledby="previewTitle">
+      <div class="modal-head">
+        <div class="preview-head-text">
+          <h2 id="previewTitle">查看图片</h2>
+          <p id="previewMeta"></p>
+        </div>
+        <button class="btn preview-copy-image" id="btnPreviewCopyImage" hidden
+                title="复制这张带标记的图片到剪贴板，可直接粘贴到聊天或文档">复制图片</button>
+      </div>
+      <div class="preview-zoom" id="previewZoomBar">
+        <button class="btn zoom-btn" id="btnZoomOut" type="button" title="缩小" aria-label="缩小">−</button>
+        <button class="preview-zoom-val" id="btnZoomReset" type="button" title="恢复为适应窗口">100%</button>
+        <button class="btn zoom-btn" id="btnZoomIn" type="button" title="放大" aria-label="放大">＋</button>
+        <button class="preview-zoom-actual" id="btnZoomActual" type="button"
+                title="按原图像素显示，最清晰">1:1 原图</button>
+        <span class="preview-zoom-note">滚轮缩放 · 双击 1:1 · 按住拖动查看任意位置</span>
+      </div>
+      <div class="preview-stage" id="previewStage">
+        <div class="preview-canvas" id="previewCanvas">
+          <img id="previewImg" alt="选择的图片">
+          <div class="preview-marks" id="previewMarks" aria-hidden="true"></div>
+        </div>
+      </div>
+      <div class="preview-tools" id="previewTools" hidden>
+        <span class="preview-angle" id="previewAngle">方向 0°</span>
+        <button class="btn" id="btnRotateLeft" type="button" title="逆时针旋转 90°">↺ 向左旋转</button>
+        <button class="btn" id="btnRotateRight" type="button" title="顺时针旋转 90°">↻ 向右旋转</button>
+        <button class="btn" id="btnRotateReset" type="button" title="恢复原始方向">复位</button>
+        <span class="preview-tools-note">调正后会在转换时按此方向识别，不改动原文件</span>
+      </div>
+      <p class="preview-hint" id="previewHint" hidden>
+        这个文件是拖入的，浏览器没有给出磁盘路径，无法复制/删除；用「添加文件」重新选择后可用。
+      </p>
+      <div class="preview-actions">
+        <button class="btn" id="btnPreviewCopy">复制文件</button>
+        <button class="btn-danger" id="btnPreviewDelete">删除文件</button>
+        <button class="btn-primary" id="btnPreviewClose">关 闭</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= 单号查询弹窗 ================= -->
+  <div class="modal-mask" id="searchModal" hidden>
+    <div class="modal search-modal" role="dialog" aria-modal="true" aria-labelledby="searchTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="searchTitle">单号查询</h2>
+          <p id="searchHint">在当前转换结果中查找运单号，显示所有出现位置</p>
+        </div>
+      </div>
+      <div class="search-modes" role="tablist" aria-label="查询方式">
+        <button class="search-mode on" id="searchModeSingle" data-smode="single" role="tab" aria-selected="true">单个查询</button>
+        <button class="search-mode" id="searchModeBatch" data-smode="batch" role="tab" aria-selected="false">批量查询</button>
+      </div>
+      <div class="search-row" id="searchSingleRow">
+        <input id="searchInput" type="text" autocomplete="off" spellcheck="false"
+               placeholder="输入完整或部分单号，例如 YT0718…">
+        <button class="btn" id="searchClear">清空</button>
+      </div>
+      <div class="search-batch" id="searchBatchBox" hidden>
+        <textarea id="searchBatchInput" spellcheck="false"
+                  placeholder="每行一个单号，也可用逗号分隔，例如：&#10;YT1234567890123&#10;YT1234567890124"></textarea>
+        <div class="search-batch-bar">
+          <button class="btn" id="searchBatchRun">批量查询</button>
+          <button class="btn" id="searchBatchExport" disabled>导出 CSV</button>
+          <button class="btn" id="searchBatchClear">清空</button>
+        </div>
+      </div>
+      <div class="search-meta" id="searchMeta">输入单号开始查询</div>
+      <div class="search-results" id="searchResults"></div>
+      <button class="btn-primary" id="searchClose">关 闭</button>
+    </div>
+  </div>
+
+  <!-- ================= 最近任务（本机历史） ================= -->
+  <div class="modal-mask" id="jobsModal" hidden>
+    <div class="modal jobs-modal" role="dialog" aria-modal="true" aria-labelledby="jobsTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="jobsTitle">最近任务</h2>
+          <p id="jobsMeta">只保存在本机，可在设置里调整保留条数</p>
+        </div>
+      </div>
+      <div class="jobs-list" id="jobsList"></div>
+      <button class="btn-primary" id="jobsClose">关 闭</button>
+    </div>
+  </div>
+
+  <!-- ================= 首次运行隐私弹窗 ================= -->
+  <div class="modal-mask" id="firstRunModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="firstRunTitle">
+      <div class="modal-head">
+        <img src="../assets/app-header.png" alt="">
+        <div>
+          <h2 id="firstRunTitle">首次使用 · 隐私声明</h2>
+          <p id="firstRunVersion">肥鸭文档转换</p>
+        </div>
+      </div>
+      <div class="modal-notice" id="firstRunNotice"></div>
+      <label class="modal-ack">
+        <input type="checkbox" id="firstRunAck">
+        <span>我已阅读并理解，不再提示</span>
+      </label>
+      <button class="btn-primary" id="firstRunConfirm">确 定</button>
+    </div>
+  </div>
+
+  <!-- ================= 关于 / 隐私弹窗 ================= -->
+  <div class="modal-mask" id="aboutModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="aboutTitle">
+      <div class="modal-head">
+        <img src="../assets/app-header.png" alt="">
+        <div>
+          <h2 id="aboutTitle">肥鸭文档转换</h2>
+          <p id="aboutVersion">版本</p>
+        </div>
+      </div>
+      <div class="card-title" style="margin-bottom:8px">
+        <span class="accent-bar"></span><span class="card-title-text">数据处理与隐私声明</span>
+      </div>
+      <div class="modal-notice" id="aboutNotice"></div>
+      <div class="update-row">
+        <span id="updateStatus">当前版本</span>
+        <button type="button" class="btn-ghost" id="btnCheckUpdate">检查更新</button>
+      </div>
+      <button class="btn-primary" id="aboutConfirm" style="margin-top:16px">确 定</button>
+    </div>
+  </div>
+
+  <!-- ================= 云端文本纠错（可选，默认关闭） ================= -->
+  <div class="modal-mask" id="cloudModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="cloudTitle">
+      <div class="modal-head">
+        <img src="../assets/app-header.png" alt="">
+        <div>
+          <h2 id="cloudTitle">云端文本纠错</h2>
+          <p>可选功能 · 默认关闭</p>
+        </div>
+      </div>
+
+      <label class="cloud-switch">
+        <input type="checkbox" id="cloudToggle">
+        <span>启用云端文本纠错</span>
+      </label>
+
+      <div class="modal-notice" id="cloudNotice">
+        开启后，对识别存疑的单元格，程序会将该单元格的<strong>局部裁剪图</strong>与当前识别文字
+        发送到 NVIDIA 托管模型接口（integrate.api.nvidia.com）做二次确认，用于校正商品名称等
+        中文文本。该功能面向有自己 NVIDIA API Key 的高级用户，普通用户保持关闭即可。<br><br>
+        · 运单号、日期、数量等编码字段<strong>不会</strong>外发；<br>
+        · 不发送整张图片，只发存疑单元格；<br>
+        · 关闭时程序不会向云端发送任何图片或文字；<br>
+        · 密钥仅从本机环境变量 IMG2DOC_NVIDIA_KEY 或配置中读取，不写入任何分发文件。
+      </div>
+
+      <div class="cloud-status" id="cloudStatus"></div>
+
+      <button class="btn-primary" id="cloudConfirm" style="margin-top:16px">确 定</button>
+    </div>
+  </div>
+
+  <!-- ================= 设置（本机配置） ================= -->
+  <div class="modal-mask" id="settingsModal" hidden>
+    <div class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle">
+      <div class="modal-head">
+        <img src="../assets/app-header.png" alt="">
+        <div>
+          <h2 id="settingsTitle">设置</h2>
+          <p>只保存在本机，不上传</p>
+        </div>
+      </div>
+
+      <label class="setting-row">
+        <span class="setting-label">默认工作方式</span>
+        <select id="setDefaultMode">
+          <option value="full">图片转 Excel</option>
+          <option value="waybill">单号清单导出</option>
+          <option value="find">查找单号</option>
+        </select>
+      </label>
+
+      <label class="setting-row">
+        <span class="setting-label">完成后自动打开 Excel</span>
+        <input type="checkbox" id="setAutoOpen">
+      </label>
+
+      <label class="setting-row">
+        <span class="setting-label">任务历史保留</span>
+        <span class="setting-inline">
+          <input type="number" id="setJobKeep" min="1" max="50" step="1">
+          <span>条</span>
+        </span>
+      </label>
+
+      <label class="setting-row">
+        <span class="setting-label">鼠标移入时自动激活窗口（可直接 Ctrl+V 粘贴）</span>
+        <input type="checkbox" id="setHoverActivate">
+      </label>
+
+      <label class="setting-row">
+        <span class="setting-label">全局粘贴快捷键 Ctrl+Shift+Alt+V（下次启动生效）</span>
+        <input type="checkbox" id="setPasteHotkey">
+      </label>
+
+      <label class="setting-row">
+        <span class="setting-label">启动时检查更新（只查询版本号，不上传数据）</span>
+        <input type="checkbox" id="setCheckUpdates">
+      </label>
+
+      <div class="setting-row">
+        <span class="setting-label">当前保存位置</span>
+        <span class="setting-value" id="setOutPath">—</span>
+      </div>
+
+      <p class="setting-hint">
+        默认工作方式在下次启动时生效；保存位置在右侧「保存位置」修改后自动记住。
+        任务历史与待复核快照只写本机 AppData，清理不会影响已导出的 Excel。
+      </p>
+      <div class="setting-actions">
+        <button class="btn-ghost" id="btnSettingsCloud">云端文本纠错…</button>
+        <button class="btn-ghost" id="btnClearJobs">清除任务历史…</button>
+      </div>
+
+      <button class="btn-primary" id="settingsConfirm" style="margin-top:16px">保存设置</button>
+    </div>
+  </div>
+
+  <!-- 剪贴板悬停提示：复制图片后鼠标移入窗口即出现，点一下加入文件列表 -->
+  <div class="paste-chip" id="pasteChip" hidden>
+    <svg class="paste-chip-icon" viewBox="0 0 24 24" aria-hidden="true">
+      <rect x="7" y="4" width="10" height="4" rx="1.5"/>
+      <path d="M9 6H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3"/>
+    </svg>
+    <span id="pasteChipText">剪贴板里有图片，点击粘贴</span>
+    <button class="paste-chip-close" id="pasteChipClose" type="button" aria-label="关闭提示">×</button>
+  </div>
+
+  <!-- 拖拽整窗提示：从微信/资源管理器拖文件进来时显示 -->
+  <div class="drag-overlay" id="dragOverlay" hidden aria-hidden="true">
+    <div class="drag-overlay-card">
+      <b>松手即可添加</b>
+      <span>图片 / PDF / 文件夹</span>
+    </div>
+  </div>
+
+  <!-- 无边框窗口缩放热区（仅桌面壳内显示，浏览器模式隐藏） -->
+  <div class="win-grip win-grip-n" data-dir="n"></div>
+  <div class="win-grip win-grip-s" data-dir="s"></div>
+  <div class="win-grip win-grip-w" data-dir="w"></div>
+  <div class="win-grip win-grip-e" data-dir="e"></div>
+  <div class="win-grip win-grip-nw" data-dir="nw"></div>
+  <div class="win-grip win-grip-ne" data-dir="ne"></div>
+  <div class="win-grip win-grip-sw" data-dir="sw"></div>
+  <div class="win-grip win-grip-se" data-dir="se"></div>
+
+  <script src="app.js?v=20261122-duck3"></script>
+</body>
+</html>
