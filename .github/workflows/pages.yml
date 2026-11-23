@@ -1,0 +1,46 @@
+name: Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "index.html"
+      - "assets/**"
+      - "docs/**"
+      - "privacy_notice.txt"
+      - "CHANGELOG.md"
+      - "LICENSE"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 组装静态站点（只发布官网需要的文件）
+        run: |
+          mkdir -p site/docs
+          cp index.html site/
+          cp privacy_notice.txt CHANGELOG.md LICENSE site/
+          cp -r assets site/assets
+          cp docs/screenshot.png docs/FAQ.md site/docs/
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
