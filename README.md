@@ -17,6 +17,7 @@
 | 安装包（推荐） | 大多数 Windows 用户，装完即可在开始菜单找到 | [下载安装包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
 | 便携包 | 不想安装、放 U 盘里用 | [下载便携包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
 | 源码 | 想自己改、自己构建 | [下载源码包](https://github.com/feifei3yaya/fatduck-ocr/releases/latest) |
+| 国内镜像 | 源码同步，国内访问更快 | [Gitee](https://gitee.com/feifei8yaya_admin_admin/fatduck-ocr) |
 
 - 系统要求：Windows 10 / 11（64 位）。macOS 版本在规划中。
 - 免费、开源、无广告、无需注册账号。
