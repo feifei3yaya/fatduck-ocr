@@ -58,14 +58,7 @@
 
   /* 首屏 */
   .hero { display: grid; grid-template-columns: 1.06fr .94fr; gap: 48px; align-items: center; padding: 72px 0 56px; }
-  .eyebrow {
-    display: inline-flex; align-items: center; gap: 8px;
-    font-size: 13px; font-weight: 700; color: #8A5A00;
-    background: #FFECBC; border: 1px solid #FFDF9A;
-    padding: 6px 13px; border-radius: 999px;
-  }
-  .eyebrow i { width: 7px; height: 7px; border-radius: 50%; background: var(--green); display: inline-block; }
-  h1 { font-size: clamp(34px, 4.6vw, 56px); line-height: 1.16; margin: 18px 0 16px; letter-spacing: -.02em; }
+  h1 { font-size: clamp(34px, 4.6vw, 56px); line-height: 1.16; margin: 0 0 16px; letter-spacing: -.02em; }
   h1 em { font-style: normal; color: #B87400; background: linear-gradient(transparent 62%, #FFD873 62%); padding: 0 2px; }
   .lead { font-size: 17px; color: var(--brown-soft); max-width: 33em; margin: 0 0 26px; }
   .cta-row { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; }
@@ -214,7 +207,6 @@
 <main id="top">
   <div class="wrap hero">
     <div>
-      <span class="eyebrow"><i></i>免费开源 · 本地识别 · 无需联网</span>
       <h1>把拍歪的表格照片，<br>变成<em>能编辑的 Excel</em></h1>
       <p class="lead">拖进图片或 PDF，几秒后得到保留行列结构的 Excel。不用注册，不用上传，不用担心资料泄露。</p>
       <div class="cta-row">
