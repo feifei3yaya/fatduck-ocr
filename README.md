@@ -6,7 +6,7 @@
 
 拍一张表格照片，或者把 PDF 丢进来，几秒钟后得到一份保留行列结构的 Excel。全程在本机识别，图片和结果不上传云端。
 
-官网：[feifei3yaya.github.io/fatduck-ocr](https://feifei3yaya.github.io/fatduck-ocr/) · 下载：[最新版本](https://github.com/feifei3yaya/fatduck-ocr/releases/latest)
+下载：[最新版本](https://github.com/feifei3yaya/fatduck-ocr/releases/latest)
 
 ![界面预览](docs/screenshot.png)
 
