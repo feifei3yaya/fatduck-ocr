@@ -56,9 +56,9 @@ EXTRA_FILES = (
 def read_version() -> str:
     """版本号唯一来源：项目根 VERSION 文件。"""
     try:
-        return (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "1.1.1"
+        return (ROOT / "VERSION").read_text(encoding="utf-8").strip() or "1.1.2"
     except OSError:
-        return "1.1.1"
+        return "1.1.2"
 
 
 def human(mb: float) -> str:

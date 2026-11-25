@@ -34,9 +34,9 @@ def read_version() -> str:
     p = ROOT / "VERSION"
     try:
         text = p.read_text(encoding="utf-8").strip()
-        return text or "1.1.1"
+        return text or "1.1.2"
     except OSError:
-        return "1.1.1"
+        return "1.1.2"
 
 
 def write_version_files(version: str) -> None:

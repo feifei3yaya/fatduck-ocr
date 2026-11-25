@@ -415,51 +415,52 @@ class OcrEngine:
             return self._orient[1], self._orient[2], self._orient[3], self._orient[4]
         result = (0.0, None, None, None)
         h, w = img.shape[:2]
-        density = len(boxes) / max(0.1, (h * w) / 1e6)
-        aspects = [(b[3] - b[1]) / max(1, b[2] - b[0]) for b in boxes]
-        med_aspect = float(np.median(aspects)) if aspects else 0.0
-        if len(boxes) >= 8 and med_aspect >= 0.65 and density >= 80:
+        if len(boxes) >= 4:
             import cv2
 
-            cands = []
-            for ang in (90, 270):
-                rot = cv2.rotate(
-                    img,
-                    cv2.ROTATE_90_CLOCKWISE if ang == 90 else cv2.ROTATE_90_COUNTERCLOCKWISE,
-                )
+            # 四方向投票：0/90/180/270 全部参与评比，不再依赖"方框密度"
+            # 触发门槛——稀疏文字、手写、上下颠倒的旋转页旧门槛会漏判
+            # （实测 180° 页中位高宽比 1.11 与 90° 同形状，密度门槛也漏）。
+            # 在 1200px 小图上每方向 det 一次 + 最大 24 框子集 rec 一次，
+            # 用领域词/单号证据选方向；证据相同或都不足时保持 0°，
+            # 正常页面（0° 读得最好或各方都读不好）不会被乱转。
+            edge = max(h, w)
+            scale = min(1.0, 1200.0 / edge)
+            small = img if scale >= 1.0 else cv2.resize(
+                img, (max(1, round(w * scale)), max(1, round(h * scale))),
+                interpolation=cv2.INTER_AREA)
+            codes = {0: None, 90: cv2.ROTATE_90_CLOCKWISE,
+                     180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}
+            scored = []
+            for ang in (0, 90, 180, 270):
+                simg = small if codes[ang] is None else cv2.rotate(small, codes[ang])
+                sboxes = self.detect(simg)
+                subset = sorted(sboxes, key=lambda b: (b[2] - b[0]) * (b[3] - b[1]),
+                                reverse=True)[:24]
+                scored.append((self._orient_score(self.recognize(simg, subset)), ang))
+            scored.sort(key=lambda t: (t[0][0], t[0][1], t[0][2], -t[1]), reverse=True)
+            best, second = scored[0], scored[1]
+            if best[1] != 0 and best[0][0] >= 6 and best[0][0] > second[0][0]:
+                rot = cv2.rotate(img, codes[best[1]])
                 r_boxes = self.detect(rot)
-                texts = self.recognize(rot, r_boxes)
-                joined = "".join(t for t, _s in texts if t.strip())
-                words = sum(joined.count(word) for word in _ORIENT_WORDS)
-                tokens = len(_ORIENT_TOKEN_RE.findall(joined))
-                hi = sum(len(t) for t, s in texts if t.strip() and s >= 0.8)
-                chars = sum(len(t) for t, s in texts if t.strip() and s >= 0.5)
-                cands.append((words * 3 + tokens * 2, hi, chars, ang, rot, r_boxes, texts))
-            cands.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
-            best, second = cands[0], cands[1]
-            clear = best[0] >= 6 and best[0] > second[0]
-            # 文字量兜底必须建立在"确实读出了领域词/运单号"之上：
-            # 正着的密排小字表格转 90° 后会变成形近乱码，碎片字符的置信度
-            # 反而更高（实测 849c34ef 领域证据 0 -> 0、高置信字符 46 -> 103），
-            # 只看字符量会把正着的多栏表转反，网格检测随之失败、整页丢单号。
-            by_text = (best[0] > 0 and best[1] >= 100
-                       and best[1] >= int(second[1] * 1.5)
-                       and best[2] >= int(second[2] * 1.3))
-            if clear or by_text:
-                log(f"方向校正: 版面疑似转了 90°（框密度 {density:.0f}/MP、"
-                    f"中位高宽比 {med_aspect:.2f}），"
-                    f"采用{'顺时针' if best[3] == 90 else '逆时针'} 90°"
-                    f"（领域证据 {second[0]} -> {best[0]}，高置信字符 {second[1]} -> {best[1]}）")
-                result = (float(best[3]), best[4], best[5], best[6])
-            else:
-                log(f"方向校正: 版面疑似转了 90°，但两个方向都没有领域证据"
-                    f"（领域证据 {second[0]} / {best[0]}，高置信字符 {second[1]} / {best[1]}），"
-                    f"保持原方向")
+                r_texts = self.recognize(rot, r_boxes)
+                log(f"方向校正: 四方向投票 {[(a, s[0]) for s, a in scored]}，"
+                    f"采用 {best[1]}°（领域证据 {second[0][0]} -> {best[0][0]}）")
+                result = (float(best[1]), rot, r_boxes, r_texts)
         self._orient = (path, *result)
         return result
 
+    def _orient_score(self, texts):
+        """方向证据打分：(领域词*3+单号*2, 高置信字符数, 总字符数)。"""
+        joined = "".join(t for t, _s in texts if t.strip())
+        words = sum(joined.count(word) for word in _ORIENT_WORDS)
+        tokens = len(_ORIENT_TOKEN_RE.findall(joined))
+        hi = sum(len(t) for t, s in texts if t.strip() and s >= 0.8)
+        chars = sum(len(t) for t, s in texts if t.strip() and s >= 0.5)
+        return (words * 3 + tokens * 2, hi, chars)
+
     def decide_rotation(self, path: str) -> int:
-        """供 table_grid 等非 OCR 操作使用：返回该图需要的旋转角（0/90/270）。"""
+        """供 table_grid 等非 OCR 操作使用：返回该图需要的旋转角（0/90/180/270）。"""
         img = load_image(path)
         boxes = self.detect(img)
         angle, _img, _b, _t = self._decide_rotation(path, img, boxes)
@@ -838,6 +839,62 @@ class OcrEngine:
                 "text": text, "score": round(score, 4), "bbox": candidate["bbox"],
                 "rotation": candidate["rotation"],
             })
+        # 180° 兜底：0° 结果读不出领域词/单号（疑似上下颠倒）时，在 180°
+        # 方向重新检测+识别，证据明显更强才采用；正常页面零额外开销。
+        for image_index, item in enumerate(prepared):
+            if isinstance(item, Exception) or not out[image_index].get("ok"):
+                continue
+            joined0 = "".join(b["text"] for b in out[image_index]["boxes"])
+            sc0 = (sum(joined0.count(wd) for wd in _ORIENT_WORDS) * 3
+                   + len(_ORIENT_TOKEN_RE.findall(joined0)) * 2)
+            if sc0 >= 6:
+                continue
+            orig = load_image(paths[image_index])
+            oh, ow = orig.shape[:2]
+            rot = cv2.rotate(orig, cv2.ROTATE_180)
+            scale = min(1.0, float(max_edge) / max(oh, ow))
+            small = rot if scale >= 1.0 else cv2.resize(
+                rot, (max(1, round(ow * scale)), max(1, round(oh * scale))),
+                interpolation=cv2.INTER_AREA)
+            sh, sw = small.shape[:2]
+            r_boxes = self.detect(small, det_thresh=FIND_DET_THRESH,
+                                  box_thresh=FIND_BOX_THRESH)
+            cands = self._search_candidates(r_boxes)
+            if not cands and r_boxes:
+                cands = [min(r_boxes, key=lambda b: b[2] - b[0])]
+            max_crop_width = max(140, int(round(0.28 * sw)))
+            crops180, meta180 = [], []
+            for box in cands:
+                x1, y1, x2, y2 = box
+                if x2 - x1 > max_crop_width:
+                    continue
+                # 小图(180°)坐标 -> 源图坐标：先换回 180° 原图再中心对称
+                mapped = [max(0, min(ow, round(ow - x2 / scale))),
+                          max(0, min(oh, round(oh - y2 / scale))),
+                          max(0, min(ow, round(ow - x1 / scale))),
+                          max(0, min(oh, round(oh - y1 / scale)))]
+                pad_y = max(1, int(round(0.10 * (y2 - y1))))
+                pad_l = max(1, int(round(0.15 * (y2 - y1))))
+                pad_r = max(2, int(round(0.60 * (y2 - y1))))
+                fx1 = max(0, int(round((x1 - pad_l) / scale)))
+                fy1 = max(0, int(round((y1 - pad_y) / scale)))
+                fx2 = min(ow, int(round((x2 + pad_r) / scale)))
+                fy2 = min(oh, int(round((y2 + pad_y) / scale)))
+                crop = rot[fy1:fy2, fx1:fx2]
+                if crop.size == 0:
+                    continue
+                crops180.append(crop.copy())
+                meta180.append(mapped)
+            if not crops180:
+                continue
+            texts180 = self._recognize_crops(crops180, batch_size=REC_BATCH)
+            boxes180 = [{"text": t, "score": round(s, 4), "bbox": mb, "rotation": 180}
+                        for mb, (t, s) in zip(meta180, texts180) if t.strip()]
+            joined180 = "".join(b["text"] for b in boxes180)
+            sc180 = (sum(joined180.count(wd) for wd in _ORIENT_WORDS) * 3
+                     + len(_ORIENT_TOKEN_RE.findall(joined180)) * 2)
+            if sc180 >= 6 and sc180 > sc0:
+                out[image_index]["boxes"] = boxes180
         return out
 
     def _rectified(self, path: str):
@@ -1931,12 +1988,15 @@ def detect_table_grid(path: str, target_long_edge: int = 2200,
         base_to_orig = np.array([[0, 1, 0], [-1, 0, orig_h - 1], [0, 0, 1]], dtype=np.float64)
     elif int(rotate or 0) == 270:       # ROTATE_90_COUNTERCLOCKWISE
         base_to_orig = np.array([[0, -1, orig_w - 1], [1, 0, 0], [0, 0, 1]], dtype=np.float64)
+    elif int(rotate or 0) == 180:       # ROTATE_180
+        base_to_orig = np.array([[-1, 0, orig_w - 1], [0, -1, orig_h - 1], [0, 0, 1]], dtype=np.float64)
     else:
         base_to_orig = np.eye(3, dtype=np.float64)
-    if int(rotate or 0) in (90, 270):
+    if int(rotate or 0) in (90, 270, 180):
         img = cv2.rotate(
-            img, cv2.ROTATE_90_CLOCKWISE if int(rotate) == 90
-            else cv2.ROTATE_90_COUNTERCLOCKWISE,
+            img, {90: cv2.ROTATE_90_CLOCKWISE,
+                  270: cv2.ROTATE_90_COUNTERCLOCKWISE,
+                  180: cv2.ROTATE_180}[int(rotate)],
         )
 
     # 纸张外接框：只用于约束原图候选（键帽/桌面等纸张外纹理集中在原图）。
@@ -2345,7 +2405,7 @@ def main() -> int:
                 respond({"id": rid, "ok": True, **enc})
             elif op == "table_grid":
                 angle = int(req.get("rotate") or 0)
-                if angle not in (90, 270):
+                if angle not in (90, 270, 180):
                     angle = engine.decide_rotation(req["path"])
                 grid = detect_table_grid(
                     req["path"],
