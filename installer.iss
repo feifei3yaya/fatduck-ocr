@@ -50,6 +50,9 @@ WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=admin
+PrivilegesRequiredOverridesAllowed=dialog commandline
+CloseApplications=no
+RestartApplications=no
 ShowLanguageDialog=no
 Uninstallable=yes
 
@@ -80,31 +83,84 @@ Source: tools\unblock_files.ps1; DestDir: {app}; Flags: ignoreversion
 Name: {group}\{#MyAppName}; Filename: {app}\{#MyAppExeName}
 Name: {group}\使用说明; Filename: {app}\使用说明_SmartScreen.txt
 Name: {group}\卸载 {#MyAppName}; Filename: {uninstallexe}
-Name: {commondesktop}\{#MyAppName}; Filename: {app}\{#MyAppExeName}; Tasks: desktopicon
+Name: {autodesktop}\{#MyAppName}; Filename: {app}\{#MyAppExeName}; Tasks: desktopicon
 
 [Run]
 Filename: {app}\{#MyAppExeName}; Description: 立即运行 {#MyAppName}; Flags: nowait postinstall skipifsilent
 
 [Code]
 
-{ 卸载时询问是否一并删除本地配置与日志。
-  配置在 %APPDATA%\肥鸭文档转换，日志在 %LOCALAPPDATA%\肥鸭文档转换\logs。
-  任务历史（jobs）与 WebView2 缓存不在此处删除。 }
+{ ---- 安装/卸载强化逻辑 ----
+  目标：卸载全干净、卸载后重装新版必然成功、不再被残留进程/目录/缓存阻塞。
+  1) 安装前与卸载前先结束进程（含托盘常驻、OCR 子进程），避免文件占用；
+  2) 安装前清理旧版/残缺安装残留目录与 WebView2/Edge 缓存，避免新版被残留阻塞或命中缓存显示旧页面；
+  3) 卸载默认全删（程序目录、缓存、日志、任务历史、配置），并清理跨安装模式残留。 }
+
+procedure KillAppProcesses();
+var
+    rc: Integer;
+begin
+    Exec('taskkill.exe', '/F /T /IM "肥鸭文档转换.exe"', '', SW_HIDE, ewWaitUntilTerminated, rc);
+    Sleep(500);
+end;
+
+procedure CleanCacheAndLogs();
+var
+    home: String;
+begin
+    home := GetEnv('USERPROFILE');
+    DelTree(ExpandConstant('{localappdata}\肥鸭文档转换\webview2'), True, True, True);
+    DelTree(ExpandConstant('{localappdata}\肥鸭文档转换\webview-profile'), True, True, True);
+    DelTree(ExpandConstant('{localappdata}\肥鸭文档转换\logs'), True, True, True);
+    if home <> '' then
+        DelTree(home + '\.肥鸭文档转换\webview2', True, True, True);
+end;
+
+procedure CleanOldInstallDirs();
+begin
+    DelTree(ExpandConstant('{commonpf}\肥鸭文档转换'), True, True, True);
+    DelTree(ExpandConstant('{localappdata}\Programs\肥鸭文档转换'), True, True, True);
+    { 历史版本遗留的非标准卸载项与快捷方式 }
+    RegDeleteKeyIncludingSubkeys(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\肥鸭文档转换');
+    DeleteFile(ExpandConstant('{userdesktop}\肥鸭文档转换.lnk'));
+    DeleteFile(ExpandConstant('{userprograms}\肥鸭文档转换.lnk'));
+    DeleteFile(ExpandConstant('{commondesktop}\肥鸭文档转换.lnk'));
+    DeleteFile(ExpandConstant('{commonprograms}\肥鸭文档转换.lnk'));
+end;
+
+procedure CurStepChanged(CurStep: TSetupStep);
+begin
+    if CurStep = ssInstall then
+    begin
+        KillAppProcesses();
+        CleanCacheAndLogs();
+        CleanOldInstallDirs();
+    end;
+end;
+
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var
     answer: Integer;
 begin
+    if CurUninstallStep = usUninstall then
+    begin
+        KillAppProcesses();
+        CleanCacheAndLogs();
+    end;
     if CurUninstallStep = usPostUninstall then
     begin
         answer := MsgBox('是否同时删除本地配置与日志？' #13#13
             + '配置：%APPDATA%\肥鸭文档转换' #13
             + '日志：%LOCALAPPDATA%\肥鸭文档转换\logs' #13#13
-            + '选择「是」一并删除；选择「否」保留（换机重装后可继续沿用设置）。',
-            mbConfirmation, MB_YESNO or MB_DEFBUTTON2);
+            + '选择「是」一并删除（推荐，卸载更干净）；选择「否」保留（换机重装后可继续沿用设置）。',
+            mbConfirmation, MB_YESNO or MB_DEFBUTTON1);
         if answer = IDYES then
-        begin
             DelTree(ExpandConstant('{userappdata}\肥鸭文档转换'), True, True, True);
-            DelTree(ExpandConstant('{localappdata}\肥鸭文档转换\logs'), True, True, True);
-        end;
+        { 本地数据全清：任务历史缓存、浏览器回退缓存、旧备份目录，一律删除 }
+        DelTree(ExpandConstant('{localappdata}\肥鸭文档转换'), True, True, True);
+        { 跨安装模式残留：无论本次是管理员还是用户模式卸载，两侧程序目录都清理 }
+        DelTree(ExpandConstant('{commonpf}\肥鸭文档转换'), True, True, True);
+        DelTree(ExpandConstant('{localappdata}\Programs\肥鸭文档转换'), True, True, True);
+        RegDeleteKeyIncludingSubkeys(HKCU, 'SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall\肥鸭文档转换');
     end;
 end;

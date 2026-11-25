@@ -12,7 +12,7 @@ body:
     attributes:
       label: 程序版本
       description: 在「关于 · 隐私」中可以看到
-      placeholder: 1.1.0
+      placeholder: 1.1.1
     validations:
       required: true
   - type: input
