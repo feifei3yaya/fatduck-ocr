@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>肥鸭文档转换</title>
   <link rel="icon" type="image/png" href="../assets/app.png">
-  <link rel="stylesheet" href="styles.css?v=20261122-duck3">
+  <link rel="stylesheet" href="styles.css?v=20261127-v120">
 </head>
 <body>
   <div class="app">
@@ -85,11 +85,17 @@
             <input type="file" id="fileInput" multiple hidden
                    accept=".png,.jpg,.jpeg,.bmp,.tif,.tiff,.webp,.pdf">
           </div>
+          <div class="undo-empty" id="undoEmptyWrap" hidden>
+            <button class="btn" id="btnUndoRenameEmpty" title="撤销上一批命名（包括上次打开程序时做的），磁盘文件名、文件日期与 Excel 表名一并改回"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>撤销上次命名</button>
+            <span>上次打开程序时的命名仍可撤销</span>
+          </div>
 
           <div class="file-bar">
             <button class="btn" id="btnAdd"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v8M8 12h8"/></svg>添加文件</button>
             <button class="btn" id="btnPaste" title="从剪贴板粘贴图片（窗口内任意位置按 Ctrl+V 也可以）"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="7" y="4" width="10" height="4" rx="1.5"/><path d="M9 6H6a1 1 0 0 0-1 1v13a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V7a1 1 0 0 0-1-1h-3"/></svg>粘贴图片</button>
             <button class="btn" id="btnRemove" disabled><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M8 12h8"/></svg>删除选中</button>
+            <button class="btn" id="btnNaming" disabled title="给选中（或全部）图片批量命名，同步 Excel 子表名，可选改磁盘原文件名"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7V5h16v2M9 5v14M7 19h4"/><path d="M14 13l5 5m0-5-5 5"/></svg>命名</button>
+            <button class="btn" id="btnUndoRename" hidden title="撤销上一批命名（包括上次打开程序时做的），磁盘文件名与 Excel 表名一并改回"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M9 14 4 9l5-5"/><path d="M4 9h10a6 6 0 0 1 0 12h-3"/></svg>撤销命名</button>
             <button class="btn" id="btnClear"><svg class="btn-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>清空</button>
             <span class="file-count" id="fileCount">共 0 个文件</span>
           </div>
@@ -187,6 +193,7 @@
               <button class="rc-btn" id="btnFlags" hidden>待复核</button>
               <button class="rc-btn" id="btnRetryFailed" hidden>重试失败文件</button>
               <button class="rc-btn" id="btnSearch" hidden>单号查询</button>
+              <button class="rc-btn" id="btnTable" hidden>查看表格</button>
               <button class="rc-btn" id="btnFullCheck" hidden>完整识别并导出 Excel</button>
               <button class="rc-btn" id="btnDownload" hidden>下载</button>
             </div>
@@ -318,6 +325,41 @@
     </main>
   </div>
 
+  <!-- ================= 识别结果表内预览 ================= -->
+  <div class="modal-mask" id="tableModal" hidden>
+    <div class="modal table-modal" role="dialog" aria-modal="true" aria-labelledby="tableTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="tableTitle">识别结果预览</h2>
+          <p id="tableMeta">直接核对识别结果，不必打开 Excel</p>
+        </div>
+      </div>
+      <div class="table-tools">
+        <div class="table-sheets" id="tableSheets" role="tablist" aria-label="工作表"></div>
+        <div class="table-actions">
+          <input id="tableSearch" type="text" spellcheck="false" placeholder="在当前表内搜索…">
+          <button class="btn" id="btnTableExportCsv" type="button">导出 CSV</button>
+          <button class="btn" id="btnTableExportJson" type="button">导出 JSON</button>
+        </div>
+      </div>
+      <div class="table-scroll" id="tableScroll">
+        <table class="result-table">
+          <thead>
+            <tr id="tableHead"></tr>
+          </thead>
+          <tbody id="tableBody"></tbody>
+        </table>
+      </div>
+      <div class="table-foot">
+        <span id="tableFoot"></span>
+        <div class="table-foot-actions">
+          <button class="btn" id="tableLoadMore" type="button" hidden>加载更多</button>
+          <button class="btn-primary" id="tableClose">关闭</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- ================= 待复核清单弹窗 ================= -->
   <div class="modal-mask" id="flagModal" hidden>
     <div class="modal flag-modal" role="dialog" aria-modal="true" aria-labelledby="flagTitle">
@@ -426,6 +468,51 @@
       </div>
       <div class="jobs-list" id="jobsList"></div>
       <button class="btn-primary" id="jobsClose">关 闭</button>
+    </div>
+  </div>
+
+  <!-- ================= 图片命名（批量改显示名 / 磁盘名 / Excel 子表名） ================= -->
+  <div class="modal-mask" id="namingModal" hidden>
+    <div class="modal naming-modal" role="dialog" aria-modal="true" aria-labelledby="namingTitle">
+      <div class="modal-head">
+        <div>
+          <h2 id="namingTitle">图片命名</h2>
+          <p id="namingMeta">给图片起个看得懂的名字，列表、预览与 Excel 子表都会用它</p>
+        </div>
+      </div>
+
+      <div class="naming-template">
+        <input id="namingPrefix" type="text" spellcheck="false" placeholder="前缀，例如：运单">
+        <button class="btn naming-var" type="button" data-var="{序号}" title="按顺序编号 001、002…">{序号}</button>
+        <button class="btn naming-var" type="button" data-var="{日期}" title="识别到的打印时间日期 YYYYMMDD，没识别到则用当天">{日期}</button>
+        <button class="btn naming-var" type="button" data-var="{原名}" title="插入原始文件名（去扩展名）">{原名}</button>
+        <button class="btn" id="btnNamingTemplate" type="button">应用模板</button>
+        <button class="btn" id="btnNamingSuggest" type="button" title="用最近一次识别结果建议名称">智能建议</button>
+      </div>
+      <p class="naming-hint" id="namingSuggestHint" hidden>识别完成后可用「智能建议」。</p>
+
+      <label class="modal-ack naming-disk">
+        <input type="checkbox" id="namingDisk" checked>
+        <span>同时重命名磁盘原文件（拖入/粘贴的图片没有磁盘路径，仅改表格名）</span>
+      </label>
+      <label class="modal-ack naming-disk">
+        <input type="checkbox" id="namingDate">
+        <span>同时把文件日期改为识别到的打印时间（没识别到打印时间的图片保持原样）</span>
+      </label>
+
+      <div class="naming-table-wrap">
+        <table class="naming-table">
+          <thead>
+            <tr><th class="c-orig">原名</th><th>新名称</th><th class="c-state">状态</th></tr>
+          </thead>
+          <tbody id="namingBody"></tbody>
+        </table>
+      </div>
+
+      <div class="naming-actions">
+        <button class="btn" id="namingClose">取 消</button>
+        <button class="btn-primary" id="btnNamingApply">应 用</button>
+      </div>
     </div>
   </div>
 
@@ -596,6 +683,6 @@
   <div class="win-grip win-grip-sw" data-dir="sw"></div>
   <div class="win-grip win-grip-se" data-dir="se"></div>
 
-  <script src="app.js?v=20261122-duck3"></script>
+  <script src="app.js?v=20261127-v120"></script>
 </body>
 </html>

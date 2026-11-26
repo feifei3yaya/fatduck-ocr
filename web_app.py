@@ -56,13 +56,22 @@ import core
 import job_store
 import nv_fix
 from engine import EngineError, OcrWorker, build_exact_page
-from md2excel import (_triage_flags, convert_exact, convert_waybill,
+from ai_calibrate import parse_date
+from md2excel import (_sheet_title, _triage_flags, convert_exact, convert_waybill,
                       flag_image_box)
 
 ROOT = Path(__file__).resolve().parent
 WEB_DIR = ROOT / "web"
 ASSETS_DIR = ROOT / "assets"
 HOST, DEFAULT_PORT = "127.0.0.1", 8765
+
+APP_VERSION = core.APP_VERSION
+# 版本检查：只查询 GitHub Releases 的最新版本号，不发送任何文件或个人信息。
+# 仓库地址可通过环境变量覆盖（国内镜像/自建仓库同样适用）。
+UPDATE_REPO = os.environ.get("FATDUCK_UPDATE_REPO", "feifei3yaya/fatduck-ocr").strip()
+UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
+UPDATE_CACHE = {"t": 0.0, "data": None}
+UPDATE_CACHE_SECONDS = 6 * 3600
 
 
 def _pick_port(preferred: int = DEFAULT_PORT, tries: int = 10) -> int:
@@ -82,14 +91,6 @@ def _pick_port(preferred: int = DEFAULT_PORT, tries: int = 10) -> int:
 
 
 PORT = _pick_port()
-
-# 版本检查：只查询 GitHub Releases 的最新版本号，不发送任何文件或个人信息。
-# 仓库地址可通过环境变量覆盖（国内镜像/自建仓库同样适用）。
-APP_VERSION = core.APP_VERSION
-UPDATE_REPO = os.environ.get("FATDUCK_UPDATE_REPO", "feifei3yaya/fatduck-ocr").strip()
-UPDATE_API_URL = f"https://api.github.com/repos/{UPDATE_REPO}/releases/latest"
-UPDATE_CACHE = {"t": 0.0, "data": None}
-UPDATE_CACHE_SECONDS = 6 * 3600
 
 # 前端每 5s 发一次心跳；浏览器在后台时定时器会被限流到约 1 次/分钟，
 # 因此超时阈值取 180s，既不会误杀最小化的窗口，也能在关窗后自动退出。
@@ -413,7 +414,7 @@ def _file_summary(pages, page_seconds) -> list[dict]:
 
 
 def _quality_tier(level: str) -> str:
-    """对外档位：沿用现有三档语义，“良好”对用户呈现为“可用”。"""
+    """对外档位：沿用现有三档语义，内部“良好”呈现为“可用”。"""
     return "可用" if level == "良好" else level
 
 
@@ -1143,6 +1144,210 @@ def _unique_output(path: Path) -> Path:
     return path.with_name(f"{stem} ({int(time.time())}){suffix}")
 
 
+# ---------------------------------------------------------------- 图片命名
+# 显示名（label）清洗复用 md2excel._sheet_title 同一套规则：非法字符 \ / ? * [ ] :
+# 替换为下划线、去掉扩展名、截断到 28 字符（Excel 上限 31，预留重名后缀位）。
+def _clean_label(name: str) -> str:
+    return _sheet_title(str(name or ""), set())
+
+
+# 磁盘文件名清洗：Windows 非法字符 \ / : * ? " < > | 与控制字符替换为下划线，
+# 去首尾空白与结尾的点（资源管理器不允许），限长 120 字符。空名由调用方拒绝。
+_DISK_ILLEGAL_RE = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
+
+
+def _clean_disk_name(name: str) -> str:
+    cleaned = _DISK_ILLEGAL_RE.sub("_", str(name or "")).strip()
+    cleaned = cleaned.rstrip(". ").strip()
+    return cleaned[:120].strip()
+
+
+def _registered_file(target: Path) -> bool:
+    """路径白名单复用：只认 pick-files / convert 登记过的文件（ALLOWED_FILES）。
+
+    与 preview/file-op 同一机制；额外按 resolve 比对，兼容斜杠/大小写差异。
+    """
+    if str(target) in ALLOWED_FILES:
+        return True
+    resolved = _resolve_path(target)
+    if resolved is None:
+        return False
+    return any(_resolve_path(p) == resolved for p in ALLOWED_FILES)
+
+
+# 标题候选里的固定说明行/页脚/汇总词：这些出现在表格上方也不算表单标题
+_TITLE_NOISE_RE = re.compile(
+    r"备注|合计|小计|总计|序号|打印|页码|签收|制单|审核|第\s*\d+\s*页")
+_TITLE_WAYBILL_RE = re.compile(r"(?:R\d{2}T)?YT\d{8,}", re.I)
+_TITLE_PURE_NUM_RE = re.compile(r"[\d\s.\-/:：年月日]*")
+_TITLE_MAX_LOOKBACK = 3  # 只向上回溯这么多个连续文字块，再远的文字不算标题
+
+
+def _title_line_ok(line) -> bool:
+    text = str(line or "").strip()
+    if len(text) < 2 or text.endswith((":", "：")):
+        return False
+    if parse_date(text) is not None or _TITLE_PURE_NUM_RE.fullmatch(text):
+        return False
+    return not (_TITLE_WAYBILL_RE.search(text) or _TITLE_NOISE_RE.search(text))
+
+
+def _page_title_text(page) -> str:
+    """取该页的标题行：从首个表格块向上回溯最多 3 个连续文字块，返回第一条像标题的行。
+
+    日期、纯数字、单号、备注/合计/打印页码等固定说明行都不是标题；回溯途中遇到
+    非文字块（如另一张表）即停止。只读已有识别产物，不改识别逻辑。
+    """
+    blocks = getattr(page, "blocks", None) or []
+    first_table = next((i for i, b in enumerate(blocks)
+                        if getattr(b, "kind", "") == "table"), None)
+    if first_table is None:
+        return ""
+    seen = 0
+    for block in reversed(blocks[:first_table]):
+        if getattr(block, "kind", "") != "text":
+            break
+        seen += 1
+        if seen > _TITLE_MAX_LOOKBACK:
+            break
+        for line in getattr(block, "lines", None) or []:
+            if _title_line_ok(line):
+                return str(line).strip()
+
+    # 几何回退路径的 blocks 只保留表格，表格外文字仍在 ocr_boxes 里：
+    # 用首行表头同文 OCR 框的位置作为标题区上界（bbox 可能把标题区域也包进来）。
+    # 找不到表头同文框时退回表格 bbox 顶边；不额外跑识别。
+    for block in blocks:
+        if getattr(block, "kind", "") != "table":
+            continue
+        boxes = []
+        for box in getattr(page, "ocr_boxes", None) or []:
+            if not isinstance(box, dict):
+                continue
+            b = box.get("bbox")
+            text = str(box.get("text") or "").strip()
+            if text and isinstance(b, (list, tuple)) and len(b) >= 4:
+                cy = (float(b[1]) + float(b[3])) / 2
+                boxes.append((cy, float(b[0]), text))
+        rows = getattr(block, "rows", None) or []
+        header_texts = {str(c).strip() for c in (rows[0] if rows else []) if str(c).strip()}
+        header_ys = [cy for cy, _x, text in boxes if text in header_texts]
+        bbox = getattr(block, "bbox", None)
+        table_top = (min(header_ys) if header_ys else
+                     (float(bbox[1]) if bbox and len(bbox) >= 4 else None))
+        if table_top is not None:
+            above = sorted((cy, x, text) for cy, x, text in boxes if cy < table_top)
+            for _y, _x, text in above:
+                if _title_line_ok(text):
+                    return text
+        break
+    return ""
+
+
+# 页脚「打印时间：2026-11-25 14:58」：只认带标签且日期完整的行，给文件日期/命名 {日期} 用
+_PRINT_TIME_LABEL_RE = re.compile(r"打印\s*(?:时[间问]|日期)\s*[:：]?")
+_CLOCK_RE = re.compile(r"(\d{1,2}):(\d{2})(?::(\d{2}))?")
+_PRINT_TIME_STRICT_RE = re.compile(r"^(\d{4})-(\d{2})-(\d{2})(?: (\d{2}):(\d{2}))?$")
+
+
+def _page_print_time(page) -> str:
+    """返回 "YYYY-MM-DD HH:MM"（无时分则只有日期），找不到返回 ""。
+
+    标签与日期需在同一行；日期走 parse_date 且只认 complete（残缺日期不当确定值）。
+    先扫文字块（页脚通常是文字块），再扫表格单元格。
+    """
+    blocks = getattr(page, "blocks", None) or []
+    lines: list[str] = []
+    for block in blocks:
+        if getattr(block, "kind", "") == "text":
+            lines.extend(str(x) for x in (getattr(block, "lines", None) or []))
+    for block in blocks:
+        if getattr(block, "kind", "") == "table":
+            for row in getattr(block, "rows", None) or []:
+                for cell in row:
+                    lines.append(str(cell or ""))
+    # 几何回退路径 ocr_boxes 是全页文字；网格路径也包含矫正图边距内的页脚
+    for box in getattr(page, "ocr_boxes", None) or []:
+        if isinstance(box, dict) and box.get("text"):
+            lines.append(str(box["text"]))
+    for line in lines:
+        m = _PRINT_TIME_LABEL_RE.search(line)
+        if not m:
+            continue
+        rest = line[m.end():]
+        parsed = parse_date(rest)
+        if not parsed or not parsed[1]:
+            continue
+        y, mo, d = parsed[0].split(".")
+        after = rest[rest.find(parsed[2]) + len(parsed[2]):]
+        clock = _CLOCK_RE.search(after)
+        if clock and int(clock.group(1)) <= 23 and int(clock.group(2)) <= 59:
+            return f"{y}-{mo}-{d} {int(clock.group(1)):02d}:{clock.group(2)}"
+        return f"{y}-{mo}-{d}"
+    return ""
+
+
+def _print_time_epoch(text) -> float | None:
+    """前端回传的 "YYYY-MM-DD HH:MM" → 本地时间 epoch；格式/取值非法返回 None。"""
+    m = _PRINT_TIME_STRICT_RE.match(str(text or "").strip())
+    if not m:
+        return None
+    y, mo, d, hh, mm = m.groups()
+    try:
+        st = time.strptime(f"{y}-{mo}-{d} {hh or '00'}:{mm or '00'}", "%Y-%m-%d %H:%M")
+        return time.mktime(st)
+    except (ValueError, OverflowError):
+        return None
+
+
+def _page_waybills(page) -> set:
+    """该页表格里的 YT 单号集合（与 _file_summary 同一提取口径）。"""
+    codes: set[str] = set()
+    for block in getattr(page, "blocks", None) or []:
+        if getattr(block, "kind", "") != "table":
+            continue
+        for row in getattr(block, "rows", None) or []:
+            for cell in row:
+                codes.update(re.findall(r"YT\d{13}", str(cell or "")))
+    return codes
+
+
+def _attach_naming(pages, files, quality: dict, file_summary: list) -> None:
+    """done 增量字段：per_file 每项加 label/suggested_name，file_summary 加 label。
+
+    智能建议：标题首行清洗截断≤20 + _序号3位；否则该页单号恰好 1 个用该单号；
+    否则回落默认 label。序号按任务内文件顺序 001 起。老字段一律不动。
+    """
+    order: dict[str, int] = {}
+    label_by_orig: dict[str, str] = {}
+    for idx, (_fid, _src, orig, label) in enumerate(files, 1):
+        order.setdefault(orig, idx)
+        label_by_orig.setdefault(orig, label)
+    per_file = quality.get("per_file") or []
+    print_by_orig: dict[str, str] = {}
+    for i, page in enumerate(pages):
+        orig = getattr(page, "source_name", "") or ""
+        seq = order.get(orig, i + 1)
+        default_label = getattr(page, "name", "") or label_by_orig.get(orig, "")
+        title = _page_title_text(page)
+        if title:
+            suggested = f"{_clean_disk_name(title)[:20]}_{seq:03d}"
+        else:
+            codes = _page_waybills(page)
+            suggested = next(iter(codes)) if len(codes) == 1 else default_label
+        print_time = _page_print_time(page)
+        if print_time and orig not in print_by_orig:
+            print_by_orig[orig] = print_time
+        if i < len(per_file):
+            per_file[i]["label"] = default_label
+            per_file[i]["suggested_name"] = suggested
+            per_file[i]["print_time"] = print_time
+    for entry in file_summary:
+        orig = str(entry.get("file", "") or "")
+        entry["label"] = label_by_orig.get(orig, Path(orig).stem)
+        entry["print_time"] = print_by_orig.get(orig, "")
+
+
 def _resolve_ocr_python(log):
     """定位 OCR 运行环境的 python（随包 runtime 优先）。"""
     return core.resolve_ocr_python(log)
@@ -1180,7 +1385,7 @@ def _warm_fast_find_worker() -> None:
 
 
 # ---------------------------------------------------------------- 转换管线
-def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: Path,
+def _run_job(job: Job, files: list[tuple[str, Path, str, str]], mode: str, out_path: Path,
              job_id: str = "", target: str = "", layout: str = "per_image",
              extra_temp_dirs: list[Path] | None = None) -> None:
     """工作线程：完整转换流程，事件经 job.q 推给 WebSocket。"""
@@ -1254,7 +1459,7 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
             # 渲染/拆页失败按文件隔离：一个坏 PDF 不能让整批任务直接失败
             render_failures: list[tuple[str, str, str]] = []
             temp_root = Path(tempfile.mkdtemp(prefix="img2xlsx_web_"))
-            for fid, source, orig_name in files:
+            for fid, source, orig_name, label in files:
                 if source.suffix.lower() == ".pdf":
                     log(f"{orig_name}：正在渲染 PDF（300 DPI）…")
                     try:
@@ -1282,7 +1487,7 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                         pdf_tmp_dirs.append(first_dir)
                     for page_no, page in enumerate(rendered, 1):
                         jobs.append((Path(page["path"]), fid,
-                                     f"{Path(orig_name).stem}-{Path(page['path']).stem}",
+                                     f"{label}-{Path(page['path']).stem}",
                                      orig_name, page_no))
                     log(f"{orig_name}：渲染出 {len(rendered)} 页")
                 else:
@@ -1290,10 +1495,10 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                     if tiff_pages:
                         for page_no, page_path in enumerate(tiff_pages, 1):
                             jobs.append((page_path, fid,
-                                         f"{Path(orig_name).stem}-第{page_no}页",
+                                         f"{label}-第{page_no}页",
                                          orig_name, page_no))
                     else:
-                        jobs.append((source, fid, orig_name, orig_name, 1))
+                        jobs.append((source, fid, label, orig_name, 1))
 
             if not jobs:
                 if render_failures:
@@ -1408,7 +1613,7 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                     "mode": "find",
                     "out_path": "",
                     "query": target,
-                    "files": [orig for _fid, _src, orig in files],
+                    "files": [orig for _fid, _src, orig, _label in files],
                     "scanned": len(jobs),
                     "matches": len(entries),
                     "exact_matches": exact_count,
@@ -1509,8 +1714,10 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                     continue
                 page.source_name = source_name
                 page.source_page = page_no
-                # 工作表名沿用用户看到的文件名，不能带上上传临时目录的 id 前缀
-                page.name = label if source_name.lower().endswith(".pdf") else Path(source_name).stem
+                # 工作表名用显示名 label（默认「图片N」或用户命名），清洗规则与
+                # md2excel._sheet_title 一致；多页 PDF/TIFF 的「-第N页/-页码」后缀已在 label 里。
+                # 来源列仍用 source_name（原名），不受命名影响。
+                page.name = _clean_label(label)
                 pages.append(page)
                 processed_since_restart += 1
                 emit(type="file_status", id=fid, tag="ok")
@@ -1566,6 +1773,9 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                 result = convert_exact(pages, out_path, include_index=False,
                                        include_aux=False, include_flags=True,
                                        quality=quality, layout=layout)
+            # 命名增量字段（label/suggested_name）在写盘后附加：不影响质量表写入，
+            # 只随 done 事件下发，供前端「命名」弹窗与结果卡按文件展示。
+            _attach_naming(pages, files, quality, file_summary)
             if mode == "full":
                 images = _make_search_previews(job_id, pages)
                 # 待复核原图定位：客户端按 page_index 取缩略图，按原图宽高换算红框
@@ -1599,7 +1809,7 @@ def _run_job(job: Job, files: list[tuple[str, Path, str]], mode: str, out_path: 
                 "mode": mode,
                 "layout": layout,
                 "out_path": str(out_path),
-                "files": [orig for _fid, _src, orig in files],
+                "files": [orig for _fid, _src, orig, _label in files],
                 "total_pages": len(pages),
                 "sheets": int(getattr(result, "sheets", 0) or 0),
                 "tables": int(getattr(result, "tables", 0) or 0),
@@ -1875,7 +2085,8 @@ async def convert_start(
         ALLOWED_OUTPUTS.add(str(out_path.resolve()))
 
     temp_root = Path(tempfile.mkdtemp(prefix="img2xlsx_web_up_"))
-    saved: list[tuple[str, Path, str]] = []
+    # (fid, 识别用路径, 原始文件名, 显示名 label)
+    saved: list[tuple[str, Path, str, str]] = []
     try:
         if items:
             # 新版前端：磁盘文件直接给路径（免上传、可预览/复制/删除），
@@ -1893,18 +2104,25 @@ async def convert_start(
                     raise ValueError("文件清单格式错误")
                 fid = _safe_fid(plan.get("id"), index)
                 name = str(plan.get("name") or "")
+                # 显示名 label（默认「图片N」/用户命名）；缺省回落原名去扩展名，
+                # 与旧版工作表名行为一致。原名 name 仍单独保留供来源列使用。
+                label_raw = str(plan.get("label") or "").strip()
                 angle = _plan_rotation(plan)
                 if plan.get("path"):
                     src = Path(str(plan["path"]))
-                    display = name or src.name
+                    orig_name = name or src.name
+                    label = label_raw or Path(orig_name).stem
+                    display = label
                     if not src.is_file():
                         raise ValueError(f"文件不存在或已被移动：{display}")
                     if src.stat().st_size > MAX_FILE_BYTES:
                         raise ValueError(f"{display} 超过单文件上限 {_MAX_FILE_TEXT}")
+                    # 登记原始磁盘路径：预览/复制/删除/命名复用同一白名单（旋转副本是临时文件，不登记）
+                    ALLOWED_FILES.add(str(src))
                     # 用户在预览里调正过方向：生成临时的转正副本再识别（PDF 页方向由渲染决定，不在此处理）
                     if angle and src.suffix.lower() != ".pdf":
                         src = _rotate_for_ocr(src, display, angle, temp_root, fid)
-                    saved.append((fid, src, display))
+                    saved.append((fid, src, orig_name, label))
                     continue
                 upload_index = plan.get("upload")
                 if not isinstance(upload_index, int) or not (0 <= upload_index < len(uploads)):
@@ -1918,9 +2136,11 @@ async def convert_start(
                 _save_upload_limited(upload, dst)
                 if angle and Path(upload.filename).suffix.lower() != ".pdf":
                     dst = _rotate_for_ocr(dst, upload.filename, angle, temp_root, fid)
-                # 同时保留界面上的原始文件名：工作表名、来源列、搜索定位都用它，
+                # 同时保留界面上的原始文件名：来源列、搜索定位都用它，
                 # 不能把上传临时目录的 id 前缀带进用户可见的结果里。
-                saved.append((fid, dst, upload.filename))
+                orig_name = upload.filename
+                label = label_raw or Path(orig_name).stem
+                saved.append((fid, dst, orig_name, label))
         else:
             # 兼容旧调用（工具脚本/自检）：fid 与上传文件按顺序配对
             if len(uploads) > MAX_FILES:
@@ -1932,7 +2152,7 @@ async def convert_start(
                 stored_name = _safe_upload_name(index, upload.filename)
                 dst = _contained_upload(temp_root, stored_name)
                 _save_upload_limited(upload, dst)
-                saved.append((fid, dst, upload.filename))
+                saved.append((fid, dst, upload.filename, Path(upload.filename).stem))
         if not saved:
             raise ValueError("没有收到可识别的文件")
     except ValueError as exc:
@@ -2173,6 +2393,361 @@ def file_op(payload: dict) -> dict:
     return {"ok": True}
 
 
+# ---------------------------------------------------------------- 图片命名
+# 最近一批 rename 的撤销映射：disk 记磁盘 old/new，sheets 记工作表 old/new。
+# 随 rename_history.json 落盘，程序重启后仍可撤销（磁盘名与表名都改回）。
+_RENAME_HISTORY: list[dict] = []
+_RENAME_HISTORY_MAX = 20
+# 辅助工作表标题：命名只改数据 sheet，这些固定附加页一律不动。
+_AUX_SHEET_TITLES = {"合并数据", "待复核清单", "待复核-低优先",
+                     "索引异常", "单号索引", "拍摄质量"}
+
+
+def _sanitize_rename_batch(raw) -> dict | None:
+    """校验从磁盘读回的一批撤销记录，只保留结构合法的条目。
+
+    磁盘条目要求 old/new 同目录（rename 只在同一目录内改名），跨目录记录
+    视为被篡改直接丢弃；工作表条目要求 path/old/new 均为非空字符串。
+    没有任何有效条目的批次返回 None。
+    """
+    if not isinstance(raw, dict):
+        return None
+    batch = {"ts": raw.get("ts") if isinstance(raw.get("ts"), (int, float)) else 0,
+             "job_id": str(raw.get("job_id") or "")[:64],
+             "disk": [], "sheets": [], "labels": [], "dates": []}
+    for rec in raw.get("labels") or []:
+        if not isinstance(rec, dict):
+            continue
+        old, new = str(rec.get("old") or ""), str(rec.get("new") or "")
+        if old and new:
+            batch["labels"].append({"old": old, "new": new})
+    for rec in raw.get("dates") or []:
+        if not isinstance(rec, dict):
+            continue
+        path = str(rec.get("path") or "")
+        old_m, new_m = rec.get("old_mtime"), rec.get("new_mtime")
+        if path and all(isinstance(v, (int, float)) and math.isfinite(v) for v in (old_m, new_m)):
+            batch["dates"].append({"path": path, "old_mtime": float(old_m),
+                                   "new_mtime": float(new_m)})
+    for rec in raw.get("disk") or []:
+        if not isinstance(rec, dict):
+            continue
+        old, new = str(rec.get("old") or ""), str(rec.get("new") or "")
+        if not old or not new:
+            continue
+        try:
+            if Path(old).parent != Path(new).parent:
+                continue
+        except (OSError, ValueError):
+            continue
+        batch["disk"].append({"old": old, "new": new})
+    for rec in raw.get("sheets") or []:
+        if not isinstance(rec, dict):
+            continue
+        path = str(rec.get("path") or "")
+        old, new = str(rec.get("old") or ""), str(rec.get("new") or "")
+        if path and old and new:
+            batch["sheets"].append({"path": path, "old": old, "new": new})
+    has_meta = bool(batch["job_id"]) and bool(batch["labels"])
+    return batch if (batch["disk"] or batch["sheets"] or batch["dates"] or has_meta) else None
+
+
+def _load_rename_history() -> None:
+    """启动时读回撤销历史；仍存在的「改名后路径」重新登记白名单。
+
+    只有程序自己改过名的文件才会被登记，撤销时才能再把它们改回去，
+    与 rename 的 fail-closed 白名单口径保持闭环。
+    """
+    _RENAME_HISTORY.clear()
+    for raw in job_store.load_rename_history():
+        batch = _sanitize_rename_batch(raw)
+        if batch is None:
+            continue
+        _RENAME_HISTORY.append(batch)
+        for rec in batch["disk"]:
+            target = Path(rec["new"])
+            try:
+                if target.is_file():
+                    ALLOWED_FILES.add(str(target))
+            except OSError:
+                continue
+    del _RENAME_HISTORY[:-_RENAME_HISTORY_MAX]
+
+
+def _save_rename_history() -> None:
+    job_store.save_rename_history(_RENAME_HISTORY[-_RENAME_HISTORY_MAX:])
+
+
+def rename_history_state() -> dict:
+    last = _RENAME_HISTORY[-1] if _RENAME_HISTORY else None
+    return {"ok": True, "can_undo": last is not None,
+            "count": len(_RENAME_HISTORY),
+            "last": ({"ts": last["ts"], "disk": len(last["disk"]),
+                      "sheets": len(last["sheets"])} if last else None)}
+
+
+@app.get("/api/rename/history")
+async def get_rename_history() -> dict:
+    """页面加载时查询：重启后是否还有可撤销的命名批次。"""
+    return rename_history_state()
+
+
+def _sync_job_labels(job_id: str, mapping: dict) -> bool:
+    """把命名结果写回任务历史快照的 file_summary[].label；没有可改的就返回 False。
+
+    老任务的条目没有 label 字段，自然不会被匹配到，不做任何补写。
+    """
+    if not job_id or not mapping:
+        return False
+    meta = job_store.load_job(job_id)
+    if not meta:
+        return False
+    changed = False
+    for entry in meta.get("file_summary") or []:
+        if not isinstance(entry, dict):
+            continue
+        new = mapping.get(str(entry.get("label") or ""))
+        if new and new != entry.get("label"):
+            entry["label"] = new
+            changed = True
+    return job_store.save_job(job_id, meta, keep=_job_keep()) if changed else False
+
+
+@app.post("/api/rename")
+def rename_files(payload: dict):
+    """批量命名：改显示名 label，可选改磁盘原文件名，并同步已导出 xlsx 的数据表名。
+
+    安全：要求改磁盘名且给了路径的，路径必须在 ALLOWED_FILES 白名单内（pick-files /
+    convert 登记过），否则整批拒绝 400；未给路径（粘贴/拖拽上传）只改显示名与表名。
+    工作簿只认产物白名单内的 out_path，只改数据 sheet 标题，不动辅助页与单元格。
+    """
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return JSONResponse({"detail": "没有要命名的文件"}, status_code=400)
+    if len(items) > MAX_FILES:
+        return JSONResponse({"detail": f"一次最多命名 {MAX_FILES} 个文件"}, status_code=400)
+    job_id = str(payload.get("job_id") or "")
+    out_path = str(payload.get("out_path") or "")
+
+    # 安全前置校验：未登记路径一律 400（fail-closed），与 preview/file-op 同一白名单。
+    # 改磁盘名与改文件日期都是动原图，同一口径。
+    for item in items:
+        if not isinstance(item, dict):
+            return JSONResponse({"detail": "命名清单格式错误"}, status_code=400)
+        if (bool(item.get("rename_disk")) or bool(item.get("set_date"))) \
+                and str(item.get("path") or ""):
+            if not _registered_file(Path(str(item["path"]))):
+                return JSONResponse(
+                    {"detail": "该文件不是从程序内选择的，未授权改名"}, status_code=400)
+
+    # 仅当带 job_id 且 out_path 在产物白名单内才加载工作簿
+    wb = None
+    wb_path = None
+    if job_id and out_path:
+        resolved = _resolve_path(out_path)
+        if resolved is not None and resolved.is_file() and resolved in _output_paths():
+            try:
+                from openpyxl import load_workbook
+                wb = load_workbook(resolved)
+                wb_path = resolved
+            except Exception:  # noqa: BLE001 - 工作簿损坏时只改显示名/磁盘名
+                wb = None
+    used = set(wb.sheetnames) if wb is not None else set()
+
+    results = []
+    batch = {"ts": time.time(), "job_id": job_id, "disk": [], "sheets": [],
+             "labels": [], "dates": []}
+    sheet_changed = False
+    for item in items:
+        fid = str(item.get("fid") or "")
+        raw_path = str(item.get("path") or "")
+        old_label = str(item.get("old_label") or "")
+        rename_disk = bool(item.get("rename_disk"))
+        set_date = bool(item.get("set_date"))
+        print_time = str(item.get("print_time") or "").strip()
+        new_name = _clean_disk_name(item.get("new_name"))
+        res = {"fid": fid, "old_path": raw_path, "new_path": raw_path,
+               "old_label": old_label, "new_name": new_name,
+               "disk_renamed": False, "sheet_renamed": False, "date_set": False}
+        if not new_name:
+            res["reason"] = "新名称为空或仅含非法字符"
+            results.append(res)
+            continue
+
+        # 1) 磁盘改名：保留原后缀，重名走 _unique_output 的 (n) 规则
+        if rename_disk and raw_path:
+            target = Path(raw_path)
+            if not target.is_file():
+                res["reason"] = "原图不存在或已被移动"
+            else:
+                suffix = target.suffix
+                stem = new_name
+                if suffix and stem.lower().endswith(suffix.lower()):
+                    stem = stem[: -len(suffix)]
+                stem = stem.strip()
+                if not stem:
+                    res["reason"] = "新名称为空或仅含非法字符"
+                else:
+                    dest = target.with_name(stem + suffix)
+                    if dest.resolve() == target.resolve():
+                        res["new_path"] = str(target)  # 同名无需改磁盘
+                    else:
+                        if dest.exists():
+                            dest = _unique_output(dest)
+                        try:
+                            os.rename(target, dest)
+                            ALLOWED_FILES.discard(str(target))
+                            ALLOWED_FILES.add(str(dest))
+                            res["new_path"] = str(dest)
+                            res["disk_renamed"] = True
+                            batch["disk"].append({"old": str(target), "new": str(dest)})
+                        except OSError as exc:
+                            res["reason"] = f"磁盘改名失败：{exc}"
+        elif rename_disk and not raw_path:
+            res["reason"] = "原图位置未知，仅改表格名"
+
+        # 1.5) 文件日期：把修改时间改成页脚识别到的打印时间；没识别到/格式无效的不动。
+        # 放在磁盘改名之后，直接写最终路径；旧时间记进撤销批次。
+        if set_date:
+            epoch = _print_time_epoch(print_time)
+            if not print_time:
+                res.setdefault("reason", "未识别到打印时间，保持原样")
+            elif epoch is None:
+                res.setdefault("reason", "打印时间格式无效，保持原样")
+            elif not raw_path:
+                res.setdefault("reason", "原图位置未知，无法改文件日期")
+            else:
+                target = Path(res["new_path"])
+                try:
+                    st = os.stat(target)
+                    os.utime(target, (st.st_atime, epoch))
+                except OSError as exc:
+                    res.setdefault("reason", f"文件日期修改失败：{exc}")
+                else:
+                    res["date_set"] = True
+                    batch["dates"].append({"path": str(target),
+                                           "old_mtime": st.st_mtime, "new_mtime": epoch})
+
+        # 2) 工作表改名：旧 title=旧 label 清洗值，多页含「-第N页/-页码」后缀
+        if wb is not None:
+            old_base = _clean_label(old_label)
+            for ws in list(wb.worksheets):
+                title = ws.title
+                if title in _AUX_SHEET_TITLES:
+                    continue
+                if title == old_base:
+                    suffix_part = ""
+                elif old_base and title.startswith(old_base + "-"):
+                    suffix_part = title[len(old_base):]
+                else:
+                    continue
+                used.discard(title)
+                new_title = _sheet_title(new_name + suffix_part, used)
+                if new_title != title:
+                    ws.title = new_title
+                    sheet_changed = True
+                    res["sheet_renamed"] = True
+                    batch["sheets"].append(
+                        {"path": str(wb_path), "old": title, "new": new_title})
+        if old_label and old_label != new_name:
+            batch["labels"].append({"old": old_label, "new": new_name})
+        results.append(res)
+
+    if wb is not None and sheet_changed:
+        try:
+            wb.save(wb_path)
+        except Exception as exc:  # noqa: BLE001
+            return JSONResponse({"detail": f"工作表改名保存失败：{exc}"}, status_code=500)
+    synced = _sync_job_labels(job_id, {lb["old"]: lb["new"] for lb in batch["labels"]})
+    undoable = synced or bool(batch["disk"] or batch["sheets"] or batch["dates"])
+    if undoable:
+        _RENAME_HISTORY.append(batch)
+        del _RENAME_HISTORY[:-_RENAME_HISTORY_MAX]
+        _save_rename_history()
+    return {"ok": True, "results": results, "undoable": undoable}
+
+
+@app.post("/api/rename/undo")
+def rename_undo() -> dict:
+    """撤销上一批命名：磁盘改名逐条改回（目标被占用则跳过），工作表名也改回。"""
+    if not _RENAME_HISTORY:
+        return {"ok": False, "error": "没有可撤销的命名"}
+    batch = _RENAME_HISTORY.pop()
+    _save_rename_history()
+    # 先还原文件日期再改回文件名：日期记录的是改名后的路径，改回后该路径就不存在了
+    dates_restored = 0
+    for rec in batch.get("dates") or []:
+        target = Path(rec["path"])
+        try:
+            if target.is_file():
+                st = os.stat(target)
+                os.utime(target, (st.st_atime, rec["old_mtime"]))
+                dates_restored += 1
+        except OSError:
+            continue
+    disk_results = []
+    for rec in reversed(batch["disk"]):
+        old, new = rec["old"], rec["new"]
+        src, dst = Path(new), Path(old)
+        entry = {"old_path": new, "new_path": old, "restored": False}
+        if not src.is_file():
+            entry["reason"] = "改名后的文件不存在"
+        elif dst.exists():
+            entry["reason"] = "原文件名已被占用，跳过"
+        else:
+            try:
+                os.rename(src, dst)
+                ALLOWED_FILES.discard(str(src))
+                ALLOWED_FILES.add(str(dst))
+                entry["restored"] = True
+            except OSError as exc:
+                entry["reason"] = f"还原失败：{exc}"
+        disk_results.append(entry)
+
+    by_path: dict[str, list] = {}
+    for rec in batch["sheets"]:
+        by_path.setdefault(rec["path"], []).append(rec)
+    sheet_restored = 0
+    allowed_outputs = _output_paths()
+    for p, recs in by_path.items():
+        wp = Path(p)
+        # 工作簿只认产物白名单：历史可能来自落盘文件，不能只凭记录里的路径就改表名
+        if not wp.is_file() or wp not in allowed_outputs:
+            continue
+        try:
+            from openpyxl import load_workbook
+            wb = load_workbook(wp)
+        except Exception:  # noqa: BLE001
+            continue
+        sheets = {ws.title: ws for ws in wb.worksheets}
+        used = set(wb.sheetnames)
+        changed = False
+        for rec in recs:
+            ws = sheets.get(rec["new"])
+            if ws is None:
+                continue
+            used.discard(rec["new"])
+            if rec["old"] in used:
+                continue  # 目标表名被占用，跳过
+            ws.title = rec["old"]
+            used.add(rec["old"])
+            sheets[rec["old"]] = ws
+            changed = True
+            sheet_restored += 1
+        if changed:
+            try:
+                wb.save(wp)
+            except Exception:  # noqa: BLE001
+                pass
+    _sync_job_labels(batch.get("job_id", ""),
+                     {lb["new"]: lb["old"] for lb in batch.get("labels") or []})
+    return {"ok": True, "disk": disk_results, "sheet_restored": sheet_restored,
+            "dates_restored": dates_restored}
+
+
+_load_rename_history()
+
+
 @app.post("/api/cancel")
 async def convert_cancel(payload: dict) -> dict:
     job = JOBS.get(payload.get("job_id", ""))
@@ -2222,6 +2797,148 @@ async def download(path: str) -> FileResponse:
         str(target),
         filename=target.name,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+# 附加工作表：不属于用户数据，预览与结构化导出时跳过
+_AUX_SHEET_NAMES = ("待复核清单", "待复核-低优先", "拍摄质量", "单号索引", "索引异常")
+_TABLE_ROWS_MAX = 500
+_CSV_RISK_PREFIX = ("=", "+", "-", "@")
+
+
+def _cell_text(value) -> str:
+    """把 Excel 单元格值转成可展示的纯文本（None -> 空串）。"""
+    if value is None:
+        return ""
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def _authorized_xlsx(raw: str) -> Path | None:
+    """校验产物路径：必须存在、是 xlsx，且在本进程产物/任务历史白名单内。"""
+    target = Path(raw or "")
+    if not target.is_file() or target.suffix.lower() != ".xlsx":
+        return None
+    if _resolve_path(target) not in _output_paths():
+        return None
+    return target
+
+
+def _data_sheet_names(sheets: list[str]) -> list[str]:
+    return [name for name in sheets if name not in _AUX_SHEET_NAMES]
+
+
+@app.get("/api/result-table")
+def result_table(path: str, sheet: str = "", offset: int = 0,
+                 limit: int = 300) -> dict:
+    """只读读取产物数据页，供结果卡内直接核对（不需要打开 Excel）。
+
+    工作簿路径仍走产物白名单，避免被当作任意文件读取接口。
+    """
+    target = _authorized_xlsx(path)
+    if target is None:
+        return JSONResponse({"detail": "文件不存在或未授权读取"}, status_code=404)
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(target, read_only=True, data_only=False)
+    except Exception as exc:  # 损坏/占用等
+        return JSONResponse({"detail": f"无法读取工作簿：{exc}"}, status_code=400)
+    try:
+        sheets = list(wb.sheetnames)
+        data_sheets = _data_sheet_names(sheets)
+        name = sheet if sheet in sheets else (
+            data_sheets[0] if data_sheets else (sheets[0] if sheets else ""))
+        offset = max(0, int(offset or 0))
+        limit = max(1, min(int(limit or 300), _TABLE_ROWS_MAX))
+        rows: list[list[str]] = []
+        total_rows = 0
+        total_cols = 0
+        if name:
+            ws = wb[name]
+            total_rows = int(ws.max_row or 0)
+            total_cols = int(ws.max_column or 0)
+            for row in ws.iter_rows(min_row=offset + 1,
+                                    max_row=offset + limit, values_only=True):
+                rows.append([_cell_text(v) for v in row])
+        return {
+            "ok": True,
+            "sheets": sheets,
+            "data_sheets": data_sheets,
+            "sheet": name,
+            "offset": offset,
+            "limit": limit,
+            "total_rows": total_rows,
+            "total_cols": total_cols,
+            "rows": rows,
+            "truncated": offset + len(rows) < total_rows,
+        }
+    finally:
+        wb.close()
+
+
+@app.get("/api/export-structured")
+def export_structured(path: str, fmt: str = "json", sheet: str = "") -> Response:
+    """把识别结果导成结构化文件（JSON / CSV），便于二次处理。
+
+    fmt=json 时导出全部数据页；fmt=csv 时只导出 sheet 指定（或首个）数据页。
+    文件名与下载接口保持一致，中文名按 RFC 5987 编码。
+    """
+    target = _authorized_xlsx(path)
+    if target is None:
+        return JSONResponse({"detail": "文件不存在或未授权导出"}, status_code=404)
+    fmt = (fmt or "json").lower()
+    if fmt not in ("json", "csv"):
+        return JSONResponse({"detail": "仅支持 json / csv"}, status_code=400)
+    from openpyxl import load_workbook
+
+    try:
+        wb = load_workbook(target, read_only=True, data_only=False)
+    except Exception as exc:
+        return JSONResponse({"detail": f"无法读取工作簿：{exc}"}, status_code=400)
+    try:
+        sheets = list(wb.sheetnames)
+        data_sheets = _data_sheet_names(sheets)
+        payload: dict[str, list[list[str]]] = {}
+        for name in data_sheets:
+            ws = wb[name]
+            payload[name] = [[_cell_text(v) for v in row]
+                             for row in ws.iter_rows(values_only=True)]
+        if not payload:
+            return JSONResponse({"detail": "工作簿内没有数据页"}, status_code=400)
+    finally:
+        wb.close()
+
+    stem = target.stem
+    if fmt == "json":
+        body = json.dumps({"source": target.name, "sheets": payload},
+                          ensure_ascii=False, indent=2)
+        media = "application/json; charset=utf-8"
+        filename = f"{stem}.json"
+    else:
+        import csv
+        import io
+
+        name = sheet if sheet in payload else next(iter(payload))
+        buf = io.StringIO()
+        writer = csv.writer(buf, lineterminator="\r\n")
+        for row in payload[name]:
+            writer.writerow([
+                "'" + cell if cell.startswith(_CSV_RISK_PREFIX) else cell
+                for cell in row
+            ])
+        body = "\ufeff" + buf.getvalue()
+        media = "text/csv; charset=utf-8"
+        filename = f"{stem}_{name}.csv" if len(payload) > 1 else f"{stem}.csv"
+
+    return Response(
+        content=body,
+        media_type=media,
+        headers={
+            "Content-Disposition":
+                f"attachment; filename*=UTF-8''{quote(filename)}",
+        },
     )
 
 

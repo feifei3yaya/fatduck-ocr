@@ -196,3 +196,34 @@ def load_flag_states(job_id: str) -> dict:
         return {str(k): str(v) for k, v in data.items() if str(v) in FLAG_STATES}
     except Exception:
         return {}
+
+
+def rename_history_path() -> Path:
+    """命名撤销历史文件：与 jobs/ 同级，全局一份（命名可发生在转换前，没有 job_id）。"""
+    return jobs_root().parent / "rename_history.json"
+
+
+def save_rename_history(batches: list) -> bool:
+    """最近 N 批命名记录落盘，供程序重启后仍可撤销。失败不抛异常。"""
+    try:
+        path = rename_history_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text(json.dumps(list(batches or []), ensure_ascii=False),
+                       encoding="utf-8")
+        os.replace(str(tmp), str(path))
+        return True
+    except Exception:
+        return False
+
+
+def load_rename_history() -> list:
+    """读回撤销历史；文件缺失/损坏/非列表一律按空处理。"""
+    try:
+        path = rename_history_path()
+        if not path.is_file():
+            return []
+        data = json.loads(path.read_text(encoding="utf-8"))
+        return data if isinstance(data, list) else []
+    except Exception:
+        return []

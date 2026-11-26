@@ -1,4 +1,4 @@
-﻿﻿﻿﻿/* 肥鸭文档转换 —— 前端交互逻辑 */
+﻿/* 肥鸭文档转换 —— 前端交互逻辑 */
 "use strict";
 
 /* ---------------- 状态 ---------------- */
@@ -18,6 +18,8 @@ const state = {
   lastOutPath: "",
   pendingSearchQuery: "",
   autoOpen: false,
+  lastDone: null,     // 最近一次 done 事件（命名弹窗的智能建议用 suggested_name）
+  lastRename: null,   // 最近一次命名批次（撤销时回退列表 label/path）
   checkUpdates: true,
   lastUpdate: null,
 };
@@ -105,6 +107,7 @@ const els = {
   updateBanner: $("updateBanner"), updateVer: $("updateVer"),
   updateLink: $("updateLink"), updateClose: $("updateClose"),
   updateStatus: $("updateStatus"), btnCheckUpdate: $("btnCheckUpdate"),
+  setCheckUpdates: $("setCheckUpdates"),
   btnCloud: $("btnCloud"), cloudModal: $("cloudModal"), cloudToggle: $("cloudToggle"),
   cloudStatus: $("cloudStatus"), cloudConfirm: $("cloudConfirm"),
 
@@ -135,6 +138,14 @@ const els = {
   btnJobs: $("btnJobs"), jobsModal: $("jobsModal"), jobsList: $("jobsList"),
   jobsMeta: $("jobsMeta"), jobsClose: $("jobsClose"),
 
+  btnNaming: $("btnNaming"), btnUndoRename: $("btnUndoRename"),
+  btnUndoRenameEmpty: $("btnUndoRenameEmpty"), undoEmptyWrap: $("undoEmptyWrap"),
+  namingModal: $("namingModal"), namingMeta: $("namingMeta"),
+  namingPrefix: $("namingPrefix"), btnNamingTemplate: $("btnNamingTemplate"),
+  btnNamingSuggest: $("btnNamingSuggest"), namingSuggestHint: $("namingSuggestHint"),
+  namingDisk: $("namingDisk"), namingDate: $("namingDate"), namingBody: $("namingBody"),
+  namingClose: $("namingClose"), btnNamingApply: $("btnNamingApply"),
+
   previewModal: $("previewModal"), previewTitle: $("previewTitle"),
   previewMeta: $("previewMeta"), previewImg: $("previewImg"),
   previewCanvas: $("previewCanvas"), previewMarks: $("previewMarks"),
@@ -152,7 +163,15 @@ const els = {
   pasteChip: $("pasteChip"), pasteChipText: $("pasteChipText"),
   pasteChipClose: $("pasteChipClose"), dragOverlay: $("dragOverlay"),
   setHoverActivate: $("setHoverActivate"), setPasteHotkey: $("setPasteHotkey"),
-  setCheckUpdates: $("setCheckUpdates"),
+
+  btnTable: $("btnTable"), tableModal: $("tableModal"),
+  tableSheets: $("tableSheets"), tableSearch: $("tableSearch"),
+  tableHead: $("tableHead"), tableBody: $("tableBody"),
+  tableScroll: $("tableScroll"), tableFoot: $("tableFoot"),
+  tableMeta: $("tableMeta"), tableLoadMore: $("tableLoadMore"),
+  tableClose: $("tableClose"),
+  btnTableExportCsv: $("btnTableExportCsv"),
+  btnTableExportJson: $("btnTableExportJson"),
 };
 
 /* ---------------- 工具 ---------------- */
@@ -184,6 +203,7 @@ function toast(msg) {
     document.body.appendChild(el);
   }
   el.textContent = msg;
+  el.classList.remove("toast-action");
   el.style.display = "block";
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => { el.style.display = "none"; }, 2600);
@@ -324,6 +344,11 @@ function syncFileSelection() {
   els.checkAll.indeterminate = picked > 0 && picked < total;
   els.checkAll.disabled = total === 0;
   els.btnRemove.disabled = picked === 0;
+  // 命名：有选中用选中，无选中用全部，因此只要有文件就可用
+  els.btnNaming.disabled = total === 0 || state.running;
+  // 撤销入口与文件列表无关（重启后列表为空仍可撤销），只在运行中禁用
+  if (els.btnUndoRename) els.btnUndoRename.disabled = state.running;
+  syncUndoRenameVisibility();
 }
 
 function setSelected(id, on) {
@@ -362,12 +387,12 @@ function renderFiles() {
     if (checked) tr.classList.add("selected");
     tr.innerHTML = `
       <td class="c-check"><input type="checkbox" class="row-check" ${checked ? "checked" : ""} aria-label="选择 ${esc(f.name)}"></td>
-      <td title="${esc(f.name)}">
+      <td title="${esc(f.label || f.name)}（原名 ${esc(f.name)}）">
         <div class="file-cell">
           <span class="file-badge ${badgeCls}">${ext}</span>
           <div class="file-info">
-            <span class="file-name-text">${esc(f.name)}${rotBadge}</span>
-            <span class="file-sub">${f.path ? "本地文件" : "拖入文件"}</span>
+            <span class="file-name-text">${esc(f.label || f.name)}${rotBadge}</span>
+            <span class="file-sub">${esc(f.name)} · ${f.path ? "本地文件" : "拖入文件"}</span>
           </div>
         </div>
       </td>
@@ -435,6 +460,10 @@ els.checkAll.addEventListener("change", () => {
   renderFiles();
 });
 
+// 会话内单调递增的默认显示名计数器：删除/清空文件不回退，保证「图片N」唯一。
+let labelSeq = 0;
+function nextLabel() { labelSeq += 1; return "图片" + labelSeq; }
+
 function addFiles(fileList) {
   if (state.running) { toast("转换进行中，请先取消或等待完成"); return 0; }
   const exts = ["png", "jpg", "jpeg", "bmp", "tif", "tiff", "webp", "pdf"];
@@ -446,6 +475,7 @@ function addFiles(fileList) {
     state.files.push({
       id: "f" + Math.random().toString(36).slice(2, 9),
       name: file.name,
+      label: nextLabel(),
       size: file.size,
       tag: "pending",
       rotate: 0,
@@ -472,6 +502,7 @@ function addDiskFiles(items) {
     state.files.push({
       id: "f" + Math.random().toString(36).slice(2, 9),
       name: item.name,
+      label: nextLabel(),
       size: item.size,
       tag: "pending",
       rotate: 0,
@@ -615,6 +646,228 @@ els.btnClear.addEventListener("click", () => {
   log(`已清空列表（${n} 个文件，未删除磁盘原文件）。`);
   renderFiles();
 });
+
+/* ---------------- 图片命名 ---------------- */
+let namingFiles = [];   // 当前弹窗要命名的文件对象引用（选中优先，否则全部）
+
+function namingDate() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}`;
+}
+// 识别到的页脚打印时间（"2026-11-25 14:58"），按原文件名从最近一次 done 的 per_file 取；没有返回 ""
+function namingPrintTime(f) {
+  const per = (state.lastDone && state.lastDone.quality && state.lastDone.quality.per_file) || [];
+  const e = per.find((x) => x && x.file === f.name && x.print_time);
+  return e ? String(e.print_time) : "";
+}
+function namingOrigStem(f) { return String(f.name || "").replace(/\.[^./\\]+$/, ""); }
+
+function namingSuggestAvailable() {
+  const per = state.lastDone && state.lastDone.quality && state.lastDone.quality.per_file;
+  return Array.isArray(per) && per.some((e) => e && e.suggested_name);
+}
+
+function openNaming() {
+  if (state.running) { toast("转换进行中，请先取消或等待完成"); return; }
+  if (!state.files.length) { toast("请先添加文件"); return; }
+  const picked = state.files.filter((f) => state.selected.has(f.id));
+  namingFiles = picked.length ? picked : state.files.slice();
+  els.namingMeta.textContent =
+    `共 ${namingFiles.length} 个文件（${picked.length ? "选中" : "全部"}）· 列表、预览与 Excel 子表都会用新名字`;
+  renderNamingRows();
+  const canSuggest = namingSuggestAvailable();
+  els.btnNamingSuggest.disabled = !canSuggest;
+  els.namingSuggestHint.hidden = canSuggest;
+  showModal(els.namingModal);
+}
+
+function renderNamingRows() {
+  els.namingBody.innerHTML = "";
+  for (const f of namingFiles) {
+    const tr = document.createElement("tr");
+    tr.dataset.id = f.id;
+    const noPath = f.path ? "" : '<span class="naming-nopath">原图位置未知，仅改表格名</span>';
+    const stateText = f.path ? "待应用" : "仅改表格名";
+    const pt = namingPrintTime(f);
+    const printText = pt ? `打印时间 ${pt}` : "未识别到打印时间";
+    tr.innerHTML =
+      `<td class="c-orig" title="${esc(f.name)}"><span class="naming-orig">${esc(f.name)}</span><span class="naming-print">${esc(printText)}</span>${noPath}</td>` +
+      `<td><input class="naming-input" type="text" spellcheck="false" data-id="${esc(f.id)}" value="${esc(f.label || namingOrigStem(f))}"></td>` +
+      `<td class="c-state"><span class="naming-state">${stateText}</span></td>`;
+    els.namingBody.appendChild(tr);
+  }
+}
+
+function setNamingInput(id, value) {
+  const input = els.namingBody.querySelector(`input[data-id="${id}"]`);
+  if (input) input.value = value;
+}
+
+function applyNamingTemplate() {
+  const pattern = els.namingPrefix.value.trim() || "{序号}";
+  namingFiles.forEach((f, i) => {
+    const seq = String(i + 1).padStart(3, "0");
+    // {日期}：有识别到的打印时间就用它的日期（2026-11-25 → 20261125），否则当天
+    const pt = namingPrintTime(f);
+    const date = pt ? pt.slice(0, 10).replace(/-/g, "") : namingDate();
+    const name = pattern
+      .split("{序号}").join(seq)
+      .split("{日期}").join(date)
+      .split("{原名}").join(namingOrigStem(f));
+    setNamingInput(f.id, name);
+  });
+}
+
+function applyNamingSuggest() {
+  const per = (state.lastDone && state.lastDone.quality && state.lastDone.quality.per_file) || [];
+  if (!per.length) { toast("识别完成后可用"); return; }
+  const byOrig = new Map();
+  for (const e of per) { if (e && e.file && !byOrig.has(e.file)) byOrig.set(e.file, e); }
+  let hit = 0;
+  for (const f of namingFiles) {
+    const e = byOrig.get(f.name);
+    if (e && e.suggested_name) { setNamingInput(f.id, e.suggested_name); hit++; }
+  }
+  toast(hit ? `已按识别结果预填 ${hit} 个名称` : "没有可用的建议名称");
+}
+
+// 带「撤销」按钮的 toast：命名成功后给用户一个反悔入口
+function toastWithUndo(msg, onUndo) {
+  let el = document.querySelector(".toast");
+  if (!el) { el = document.createElement("div"); el.className = "toast"; document.body.appendChild(el); }
+  el.textContent = msg;
+  const btn = document.createElement("button");
+  btn.type = "button";
+  btn.className = "toast-undo";
+  btn.textContent = "撤销";
+  btn.addEventListener("click", () => { el.style.display = "none"; onUndo(); });
+  el.appendChild(btn);
+  el.classList.add("toast-action");
+  el.style.display = "block";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.style.display = "none"; }, 6000);
+}
+
+async function applyNaming() {
+  const disk = els.namingDisk.checked;
+  const setDate = !!(els.namingDate && els.namingDate.checked);
+  const items = [];
+  const prev = [];
+  for (const f of namingFiles) {
+    const input = els.namingBody.querySelector(`input[data-id="${f.id}"]`);
+    const newName = (input && input.value || "").trim();
+    if (!newName) continue;
+    items.push({ fid: f.id, path: f.path || "", old_label: f.label || "", new_name: newName,
+                 rename_disk: disk, set_date: setDate, print_time: namingPrintTime(f) });
+    prev.push({ fid: f.id, oldLabel: f.label, oldPath: f.path || "" });
+  }
+  if (!items.length) { toast("请先填写新名称"); return; }
+  els.btnNamingApply.disabled = true;
+  try {
+    const r = await fetch("/api/rename", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ items, job_id: state.jobId || "", out_path: state.lastOutPath || "" }),
+    });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(d.detail || "命名失败");
+    const results = Array.isArray(d.results) ? d.results : [];
+    let ok = 0, skip = 0, dateSet = 0, dateKept = 0;
+    for (const res of results) {
+      const f = state.files.find((x) => x.id === res.fid);
+      if (!res.new_name) { skip++; continue; }
+      ok++;
+      if (res.date_set) dateSet++;
+      else if (setDate) dateKept++;
+      if (!f) continue;
+      f.label = res.new_name;
+      if (res.disk_renamed && res.new_path) f.path = res.new_path;
+    }
+    state.lastRename = { prev, results };
+    renderFiles();
+    hideModal(els.namingModal);
+    const dateMsg = setDate
+      ? `；文件日期已改 ${dateSet} 个${dateKept ? `，${dateKept} 个未识别到打印时间/无原图路径，保持原样` : ""}` : "";
+    log(`命名完成：成功 ${ok} 个${skip ? `，跳过 ${skip} 个` : ""}${dateMsg}。`);
+    const msg = `命名成功 ${ok} 个${skip ? `，跳过 ${skip} 个` : ""}${dateMsg}`;
+    if (d.undoable) toastWithUndo(msg, undoNaming);
+    else toast(msg);
+    refreshUndoRename();
+  } catch (err) {
+    toast(err.message || String(err));
+  } finally {
+    els.btnNamingApply.disabled = false;
+  }
+}
+
+// 空列表时文件工具栏整体隐藏，撤销入口改显示在拖拽区下方；有文件时用工具栏按钮
+function syncUndoRenameVisibility() {
+  const canUndo = !!(els.btnUndoRename && !els.btnUndoRename.hidden);
+  if (els.undoEmptyWrap) els.undoEmptyWrap.hidden = !(canUndo && state.files.length === 0);
+  if (els.btnUndoRenameEmpty) els.btnUndoRenameEmpty.disabled = !!state.running;
+}
+
+// 服务端持久化了撤销历史：重启后列表为空，但上一批命名仍可撤销，按钮按服务端状态显隐
+async function refreshUndoRename() {
+  if (!els.btnUndoRename) return;
+  try {
+    const d = await (await fetch("/api/rename/history")).json();
+    els.btnUndoRename.hidden = !d.can_undo;
+  } catch { /* 查询失败不影响主流程，按钮保持原状 */ }
+  syncUndoRenameVisibility();
+}
+
+async function undoNaming() {
+  const hasLocal = !!state.lastRename;
+  if (!hasLocal && (els.btnUndoRename ? els.btnUndoRename.hidden : true)) {
+    toast("没有可撤销的命名");
+    return;
+  }
+  try {
+    const r = await fetch("/api/rename/undo", { method: "POST" });
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok || d.ok === false) throw new Error(d.error || d.detail || "撤销失败");
+    // 磁盘还原映射：改名后的路径 -> 还原回的原路径（仅 restored 的条目）
+    const restored = new Map();
+    for (const it of (d.disk || [])) { if (it.restored) restored.set(it.old_path, it.new_path); }
+    if (state.lastRename) {
+      for (const p of state.lastRename.prev) {
+        const f = state.files.find((x) => x.id === p.fid);
+        if (!f) continue;
+        f.label = p.oldLabel;
+        const res = (state.lastRename.results || []).find((x) => x.fid === p.fid);
+        if (res && res.disk_renamed) {
+          f.path = restored.has(res.new_path) ? restored.get(res.new_path) : res.new_path;
+        }
+      }
+      state.lastRename = null;
+      renderFiles();
+    }
+    const msg = `已撤销上一批命名：文件 ${restored.size} 个、工作表 ${d.sheet_restored || 0} 张已改回`;
+    log(msg + "。");
+    toast(msg);
+  } catch (err) {
+    toast(err.message || String(err));
+  } finally {
+    refreshUndoRename();
+  }
+}
+
+els.btnNaming.addEventListener("click", openNaming);
+if (els.btnUndoRename) els.btnUndoRename.addEventListener("click", undoNaming);
+if (els.btnUndoRenameEmpty) els.btnUndoRenameEmpty.addEventListener("click", undoNaming);
+els.namingClose.addEventListener("click", () => hideModal(els.namingModal));
+els.btnNamingApply.addEventListener("click", applyNaming);
+els.btnNamingTemplate.addEventListener("click", applyNamingTemplate);
+els.btnNamingSuggest.addEventListener("click", applyNamingSuggest);
+els.namingModal.addEventListener("click", (e) => { if (e.target === els.namingModal) hideModal(els.namingModal); });
+document.querySelectorAll(".naming-var").forEach((btn) =>
+  btn.addEventListener("click", () => {
+    els.namingPrefix.value += btn.dataset.var || "";
+    els.namingPrefix.focus();
+  })
+);
 
 /* ---------------- 剪贴板粘贴图片 ---------------- */
 const CLIP_EXT = {
@@ -956,10 +1209,10 @@ async function start(onlyIds) {
     const rotate = Number(f.rotate) || 0;
     if (f.path) {
       // 磁盘文件直接给路径：免上传，且能预览/复制/删除
-      plans.push({ id: f.id, name: f.name, path: f.path, rotate });
+      plans.push({ id: f.id, name: f.name, label: f.label || "", path: f.path, rotate });
     } else {
       fd.append("files", f.file, f.name);
-      plans.push({ id: f.id, name: f.name, upload: uploadIndex++, rotate });
+      plans.push({ id: f.id, name: f.name, label: f.label || "", upload: uploadIndex++, rotate });
     }
   }
   fd.append("items", JSON.stringify(plans));
@@ -1083,6 +1336,7 @@ function finish(d) {
   }
 
   state.lastOutPath = d.out_path || "";
+  state.lastDone = d;   // 命名弹窗「智能建议」用 per_file 里的 suggested_name
   // 页签计数与待复核面板用的是 state.flags；showDoneCard 只负责结果卡，
   // 这里同步一次，避免「结果卡写了 N 处待复核、页签却是空的」。
   state.flags = isWaybill ? [] : (d.flags || []);
@@ -1167,7 +1421,7 @@ function showDoneCard(d) {
     els.rcNote.textContent = notes.join("；");
     els.rcNote.hidden = notes.length === 0;
     els.rcActions.hidden = false;
-    for (const button of [els.btnOpen, els.btnReveal, els.btnFlags, els.btnDownload]) button.hidden = true;
+    for (const button of [els.btnOpen, els.btnReveal, els.btnFlags, els.btnTable, els.btnDownload]) button.hidden = true;
     els.btnSearch.hidden = false;
     els.btnSearch.textContent = "查看命中位置";
     els.btnSearch.onclick = () => openSearch(d.query || "");
@@ -1264,6 +1518,9 @@ function showDoneCard(d) {
   els.btnDownload.onclick = () => {
     if (d.download_url) location.href = d.download_url;
   };
+  // 表内核对：产物存在即可在应用内直接查表，不必打开 Excel
+  els.btnTable.hidden = !out;
+  els.btnTable.onclick = () => openResultTable(out);
 
   // 纯单号只有一个清单工作表，没有黄底单元格和待复核页，不提供该入口
   els.btnFlags.hidden = isWaybill || !(d.flags && d.flags.length);
@@ -1459,7 +1716,7 @@ function renderFileSummary(d) {
       ? ` <i class="rcs-pages">${Number(it.pages)}页</i>` : "";
     const flags = Number(it.flags) || 0;
     tr.innerHTML =
-      `<td class="rcs-file" title="${esc(it.file)}">${esc(it.file)}${pages}</td>` +
+      `<td class="rcs-file" title="${esc(it.file)}">${esc(it.label || it.file)}${pages}</td>` +
       `<td class="num">${Number(it.waybills) || 0}</td>` +
       `<td class="num">${Number(it.rows) || 0}</td>` +
       `<td class="num${flags ? " warn" : ""}">${flags}</td>` +
@@ -1473,6 +1730,147 @@ function esc(v) {
     { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]
   ));
 }
+
+/* ---------------- 识别结果表内预览（v1.8.0） ---------------- */
+const tableState = {
+  path: "", sheet: "", offset: 0, limit: 300,
+  header: [], rows: [], totalRows: 0, truncated: false, keyword: "",
+};
+
+function tableCellHtml(text) {
+  const value = String(text ?? "");
+  if (!value) return "";
+  const kw = tableState.keyword.trim().toLowerCase();
+  if (!kw) return esc(value);
+  const idx = value.toLowerCase().indexOf(kw);
+  if (idx < 0) return esc(value);
+  return esc(value.slice(0, idx))
+    + "<mark>" + esc(value.slice(idx, idx + kw.length)) + "</mark>"
+    + esc(value.slice(idx + kw.length));
+}
+
+function renderTableSheets(sheets, dataSheets, current) {
+  els.tableSheets.innerHTML = "";
+  const aux = new Set(sheets.filter((n) => !dataSheets.includes(n)));
+  for (const name of sheets) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "table-sheet" + (name === current ? " on" : "") + (aux.has(name) ? " aux" : "");
+    btn.textContent = aux.has(name) ? `${name}（附表）` : name;
+    btn.title = aux.has(name) ? "附加工作表（待复核/质量等），仅供核对" : "识别结果数据页";
+    btn.onclick = () => loadResultTable(tableState.path, name, true);
+    els.tableSheets.appendChild(btn);
+  }
+}
+
+function renderTableBody() {
+  const kw = tableState.keyword.trim().toLowerCase();
+  const rows = kw
+    ? tableState.rows.filter((row) => row.some((c) => String(c).toLowerCase().includes(kw)))
+    : tableState.rows;
+  if (!rows.length) {
+    els.tableBody.innerHTML = `<tr><td class="table-empty" colspan="${Math.max(1, tableState.header.length)}">${kw ? "当前表内没有匹配内容" : "没有可显示的数据"}</td></tr>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  rows.forEach((row, index) => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = row.map((cell) => `<td>${tableCellHtml(cell)}</td>`).join("");
+    if (index === 0 && kw) tr.classList.add("first-match");
+    frag.appendChild(tr);
+  });
+  els.tableBody.innerHTML = "";
+  els.tableBody.appendChild(frag);
+}
+
+function renderTableHead() {
+  els.tableHead.innerHTML = tableState.header
+    .map((h) => `<th>${esc(h)}</th>`).join("");
+}
+
+async function loadResultTable(path, sheet, reset) {
+  if (reset) {
+    tableState.offset = 0;
+    tableState.rows = [];
+  }
+  const params = new URLSearchParams({
+    path, sheet: sheet || "",
+    offset: String(tableState.offset), limit: String(tableState.limit),
+  });
+  try {
+    const res = await fetch("/api/result-table?" + params.toString());
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok || !data.ok) {
+      toast(data.detail || "读取表格失败");
+      return false;
+    }
+    tableState.path = path;
+    tableState.sheet = data.sheet;
+    if (reset) {
+      tableState.header = data.rows[0] || [];
+      tableState.rows = data.rows.slice(1);
+    } else {
+      tableState.rows = tableState.rows.concat(data.rows);
+    }
+    tableState.offset = data.offset + data.rows.length;
+    tableState.totalRows = data.total_rows;
+    tableState.truncated = data.truncated === true;
+    renderTableSheets(data.sheets || [], data.data_sheets || [], data.sheet);
+    renderTableHead();
+    renderTableBody();
+    const fileName = String(path).split(/[\\/]/).pop();
+    els.tableMeta.textContent = `${fileName} · 工作表「${data.sheet}」· 共 ${data.total_rows} 行 × ${data.total_cols} 列`;
+    els.tableFoot.textContent = `已显示 ${tableState.rows.length} 行`
+      + (tableState.truncated ? "，可继续加载更多" : "，已到末尾");
+    els.tableLoadMore.hidden = !tableState.truncated;
+    return true;
+  } catch {
+    toast("读取表格失败，请稍后重试");
+    return false;
+  }
+}
+
+async function openResultTable(path) {
+  if (!path) {
+    toast("暂无可核对的结果文件");
+    return;
+  }
+  tableState.keyword = "";
+  els.tableSearch.value = "";
+  els.tableHead.innerHTML = "";
+  els.tableBody.innerHTML = '<tr><td class="table-empty">正在读取…</td></tr>';
+  els.tableFoot.textContent = "";
+  els.tableLoadMore.hidden = true;
+  showModal(els.tableModal);
+  await loadResultTable(path, "", true);
+}
+
+function bindResultTable() {
+  if (!els.tableModal) return;
+  els.tableClose.onclick = () => hideModal(els.tableModal);
+  els.tableLoadMore.onclick = () => loadResultTable(tableState.path, tableState.sheet, false);
+  els.tableSearch.oninput = () => {
+    tableState.keyword = els.tableSearch.value || "";
+    renderTableBody();
+  };
+  els.tableSearch.onkeydown = (event) => {
+    if (event.key === "Escape") {
+      event.stopPropagation();
+      els.tableSearch.value = "";
+      tableState.keyword = "";
+      renderTableBody();
+    }
+  };
+  const exportFile = (fmt) => {
+    if (!tableState.path) return;
+    const params = new URLSearchParams({ path: tableState.path, fmt, sheet: tableState.sheet });
+    location.href = "/api/export-structured?" + params.toString();
+    toast(fmt === "csv" ? "正在导出 CSV…" : "正在导出 JSON…");
+  };
+  els.btnTableExportCsv.onclick = () => exportFile("csv");
+  els.btnTableExportJson.onclick = () => exportFile("json");
+}
+
 
 /* ---------------- 待复核：优先级分组（S5） ---------------- */
 const FLAG_PRIORITIES = ["高", "中", "低"];
@@ -2055,6 +2453,9 @@ function resetRunning() {
   state.running = false;
   stopElapsed();              // 保留最后一次耗时显示，只停表
   refreshStartButton();
+  // 「命名 / 撤销命名」的可用性跟着 state.running 走，复位后必须重算，
+  // 否则转换完成后它们一直停在运行中的禁用态
+  syncFileSelection();
   if (state.ws) { state.ws.close(); state.ws = null; }
 }
 
@@ -2105,7 +2506,7 @@ function resetRunOutput() {
   // 操作按钮：全部隐藏并解除旧回调，避免点到上一轮的 onclick
   els.rcActions.hidden = true;
   for (const btn of [els.btnOpen, els.btnReveal, els.btnFlags,
-    els.btnRetryFailed, els.btnSearch, els.btnFullCheck, els.btnDownload]) {
+    els.btnRetryFailed, els.btnSearch, els.btnTable, els.btnFullCheck, els.btnDownload]) {
     btn.hidden = true;
     btn.onclick = null;
   }
@@ -2535,9 +2936,10 @@ function openPreview(f) {
   clearPreviewMarks();
   resetPreviewZoom();
   previewAutoActualPending = true;
-  els.previewTitle.textContent = f.name;
+  els.previewTitle.textContent = f.label || f.name;
   els.previewMeta.textContent =
-    `${humanSize(f.size)} · ${f.path ? "磁盘文件" : "拖入文件（无磁盘路径）"}`;
+    "原名 " + f.name + " · " + humanSize(f.size) + " · "
+    + (f.path ? "磁盘文件" : "拖入文件（无磁盘路径）");
   els.previewHint.textContent =
     "这个文件是拖入的，浏览器没有给出磁盘路径，无法复制/删除；用「添加文件」重新选择后可用。";
   els.previewTools.hidden = false;
@@ -2781,7 +3183,7 @@ async function initConfig() {
     }
     renderModes();
     if (!cfg.privacy_ack) showModal(els.firstRunModal);
-    else maybeCheckUpdates();
+    maybeCheckUpdates();
   } catch (e) {
     renderModes();
   }
@@ -2801,7 +3203,6 @@ els.firstRunConfirm.addEventListener("click", async () => {
     } catch { /* 忽略 */ }
   }
   hideModal(els.firstRunModal);
-  maybeCheckUpdates();
 });
 
 /* ---------------- 版本更新检查（只查询版本号，不上传数据） ---------------- */
@@ -3151,7 +3552,8 @@ els.jobsClose.addEventListener("click", () => hideModal(els.jobsModal));
 document.addEventListener("keydown", (e) => {
   const modalOpen = !els.firstRunModal.hidden || !els.aboutModal.hidden
     || !els.cloudModal.hidden || !els.searchModal.hidden || !els.previewModal.hidden
-    || !els.jobsModal.hidden || !els.settingsModal.hidden || !els.flagModal.hidden;
+    || !els.jobsModal.hidden || !els.settingsModal.hidden || !els.flagModal.hidden
+    || !els.namingModal.hidden;
   if (e.key === "F1") { e.preventDefault(); els.btnAbout.click(); return; }
   if (e.key === "Escape") {
     if (!els.firstRunModal.hidden && !els.firstRunAck.checked) { hideModal(els.firstRunModal); return; }
@@ -3159,6 +3561,7 @@ document.addEventListener("keydown", (e) => {
     if (!els.cloudModal.hidden) { hideModal(els.cloudModal); return; }
     if (!els.jobsModal.hidden) { hideModal(els.jobsModal); return; }
     if (!els.settingsModal.hidden) { hideModal(els.settingsModal); return; }
+    if (!els.namingModal.hidden) { hideModal(els.namingModal); return; }
     if (!els.flagModal.hidden) { hideModal(els.flagModal); return; }
     if (!els.searchModal.hidden) { closeSearch(); return; }
     if (!els.previewModal.hidden) { closePreview(); return; }
@@ -3353,7 +3756,9 @@ document.addEventListener("keydown", (e) => {
 log("准备就绪。首次转换需要加载本地识别模型，可能等待几分钟。");
 renderFiles();
 applyTab(state.tab);
+bindResultTable();
 initConfig();
+refreshUndoRename();
 
 /* 心跳：本地服务据此判断窗口是否还开着，关闭窗口后自动退出程序 */
 setInterval(() => { fetch("/api/ping").catch(() => {}); }, 5000);
