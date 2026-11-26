@@ -26,6 +26,9 @@ jobs:
       - name: 前端语法检查
         run: node --check web/app.js
 
+      - name: 官网下载链接版本一致性
+        run: python tools/sync_site_version.py --check
+
       - name: 检查是否误提交敏感目录
         shell: pwsh
         run: |

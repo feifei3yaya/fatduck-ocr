@@ -145,6 +145,13 @@ def main() -> int:
     version = read_version()
     zip_path = DIST / f"{STAGE_NAME}_便携包_v{version}.zip"
     print(f"版本：{version}")
+    # 发版前把官网下载直链同步到当前版本，避免漏改导致 404
+    try:
+        import subprocess
+        subprocess.run([sys.executable, str(ROOT / "tools" / "sync_site_version.py")],
+                       check=True)
+    except Exception as exc:  # noqa: BLE001 - 同步失败不阻断打包，但提示出来
+        print(f"提示：官网版本同步失败（{exc}），请手动运行 tools/sync_site_version.py")
     stage = Path(tempfile.mkdtemp(prefix="img2xlsx_pkg_"))
     try:
         print("组装便携包…")
