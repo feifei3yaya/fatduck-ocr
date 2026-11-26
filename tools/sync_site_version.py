@@ -16,6 +16,12 @@ ROOT = Path(__file__).resolve().parent.parent
 SITE = ROOT / "index.html"
 VERSION = (ROOT / "VERSION").read_text(encoding="utf-8").strip()
 
+# CI 的 Windows 控制台默认 cp1252，打印中文会 UnicodeEncodeError，强制 UTF-8 输出
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:  # noqa: BLE001 - 老解释器没有该属性时忽略
+    pass
+
 LINK_RE = re.compile(
     r"releases/download/v[\d.]+/fatduck-ocr_(installer|portable)_v?[\d.]+\.(exe|zip)")
 CAPTION_RE = re.compile(r'(<span>Windows 桌面版 · 图片转 Excel</span><span>)v[\d.]+(</span>)')
